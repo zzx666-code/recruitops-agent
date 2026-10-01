@@ -37,7 +37,7 @@ def test_assistant_diagnostics_and_model_only_save(width, tmp_path):
         assert url.netloc == "ui.example.test"
         calls.append((url.path, request.post_data))
         filename = url.path.lstrip("/") or "index.html"
-        if filename in {"index.html", "app.js", "configuration.js", "company-sources.js", "styles.css"}:
+        if filename in {"index.html", "app.js", "configuration.js", "company-sources.js", "styles.css", "swiss.css"}:
             mime = "text/html" if filename.endswith("html") else "text/css" if filename.endswith("css") else "application/javascript"
             return route.fulfill(body=(WEB / filename).read_text(encoding="utf-8"), content_type=mime)
         if url.path == "/api/local-ui/configuration/read":
@@ -55,7 +55,10 @@ def test_assistant_diagnostics_and_model_only_save(width, tmp_path):
         return route.fulfill(status=503, json={"detail": "Unavailable fixture"})
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(channel=os.environ.get("RECRUITOPS_TEST_BROWSER_CHANNEL") or None)
+        browser = playwright.chromium.launch(
+            channel=os.environ.get("RECRUITOPS_TEST_BROWSER_CHANNEL") or None,
+            executable_path=os.environ.get("RECRUITOPS_TEST_BROWSER_EXECUTABLE") or None,
+        )
         context = browser.new_context(viewport={"width": width, "height": 900}, service_workers="block")
         context.route("**/*", route_request)
         page = context.new_page()
@@ -164,7 +167,7 @@ def test_manual_form_and_model_connections_offline(width, tmp_path):
         assert url.netloc == "ui.example.test", "No real network allowed"
         calls.append((request.method, url.path, request.post_data))
         filename = url.path.lstrip("/") or "index.html"
-        if filename in {"index.html", "app.js", "configuration.js", "company-sources.js", "styles.css"}:
+        if filename in {"index.html", "app.js", "configuration.js", "company-sources.js", "styles.css", "swiss.css"}:
             mime = "text/html" if filename.endswith("html") else "text/css" if filename.endswith("css") else "application/javascript"
             return route.fulfill(body=(WEB / filename).read_text(encoding="utf-8"), content_type=mime)
         if url.path == "/api/local-ui/configuration/read":
@@ -206,7 +209,10 @@ def test_manual_form_and_model_connections_offline(width, tmp_path):
         return route.fulfill(status=503, json={"detail": "Offline fixture: unavailable"})
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(channel=os.environ.get("RECRUITOPS_TEST_BROWSER_CHANNEL") or None)
+        browser = playwright.chromium.launch(
+            channel=os.environ.get("RECRUITOPS_TEST_BROWSER_CHANNEL") or None,
+            executable_path=os.environ.get("RECRUITOPS_TEST_BROWSER_EXECUTABLE") or None,
+        )
         context = browser.new_context(viewport={"width": width, "height": 900}, service_workers="block")
         context.add_init_script("""window.recruitopsDesktop = Object.freeze({
             applySavedConfiguration() {

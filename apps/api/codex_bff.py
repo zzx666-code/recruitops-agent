@@ -496,6 +496,7 @@ def get_codex_supervisor() -> CodexSupervisor:
         "RECRUITOPS_LLM_API_KEY",
         "RECRUITOPS_MODEL_API_BASE_URL",
         "RECRUITOPS_MODEL_API_STYLE",
+        "RECRUITOPS_MODEL_PROVIDER",
         "RECRUITOPS_MODEL_NAME",
         "RECRUITOPS_MODEL_PROVIDER_NAME",
         "RECRUITOPS_LLM_MODEL",
@@ -551,11 +552,15 @@ def get_codex_supervisor() -> CodexSupervisor:
             "TMP",
             "no_proxy",
         )
+    from packages.model_policy import codex_adapter_base
+
     CodexHomeConfig(
         model=settings.codex_model,
         provider_id=settings.codex_model_provider_id,
         provider_name=getattr(settings, "model_provider_name", "DeepSeek"),
-        base_url=settings.codex_model_base_url,
+        base_url=(codex_adapter_base(getattr(settings, "api_port", 8010))
+                  if getattr(settings, "model_api_style", "anthropic") == "openai"
+                  else settings.codex_model_base_url),
         api_key_env=settings.codex_model_api_key_env,
         reasoning_effort=settings.codex_reasoning_effort,
         model_context_window=getattr(settings, "codex_model_context_window", 1_000_000),
@@ -582,6 +587,7 @@ def get_codex_supervisor() -> CodexSupervisor:
     for field in (
         "model_api_base_url",
         "model_api_style",
+        "model_provider",
         "model_name",
         "model_provider_name",
         "llm_enabled",
@@ -700,6 +706,24 @@ def get_codex_bff_service() -> CodexBffService:
     )
 
 
+async def refresh_codex_bff_service(*, start_if_enabled: bool = False) -> bool:
+    """Discard the old process and configuration after the active model changes."""
+
+    from packages.config import get_settings
+
+    service = get_codex_bff_service() if get_codex_bff_service.cache_info().currsize else None
+    was_running = service is not None and service._started
+    if service is not None:
+        await service.stop()
+    get_codex_bff_service.cache_clear()
+    get_codex_threads.cache_clear()
+    get_codex_supervisor.cache_clear()
+    if (was_running or start_if_enabled) and get_settings().codex_runtime_enabled:
+        await get_codex_bff_service().start()
+        return True
+    return False
+
+
 __all__ = [
     "CodexBffService",
     "CodexEventSubscription",
@@ -707,5 +731,6 @@ __all__ = [
     "get_codex_bff_service",
     "get_codex_supervisor",
     "get_codex_threads",
+    "refresh_codex_bff_service",
     "turn_limits_from_settings",
 ]

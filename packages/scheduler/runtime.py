@@ -610,6 +610,7 @@ def build_runtime_task_handlers(
             model=configured.llm_model,
             endpoint=configured.llm_endpoint,
             api_style=configured.model_api_style,
+            provider=configured.model_provider,
             timeout=configured.llm_timeout_seconds,
             max_tokens=configured.llm_matching_max_tokens,
             thinking_enabled=configured.llm_matching_thinking_enabled,

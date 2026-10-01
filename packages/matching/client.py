@@ -9,7 +9,10 @@ from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .models import DeepSeekResponse
-from packages.model_policy import DEEPSEEK_RESPONSES, official_endpoint, official_model
+from packages.model_policy import (
+    DEEPSEEK_RESPONSES, PROVIDER_STYLES,
+    completion_endpoint, official_endpoint, validate_connection,
+)
 
 
 DEFAULT_ENDPOINT = "https://api.deepseek.com/anthropic/v1/messages"
@@ -153,6 +156,22 @@ def _text_content(data: Mapping[str, Any]) -> str:
     return text
 
 
+def _chat_content(data: Mapping[str, Any]) -> str:
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
+        raise DeepSeekClientError("response_invalid")
+    choice = choices[0]
+    if choice.get("finish_reason") == "length":
+        raise DeepSeekClientError("response_truncated")
+    if choice.get("finish_reason") != "stop":
+        raise DeepSeekClientError("response_invalid")
+    message = choice.get("message")
+    content = message.get("content") if isinstance(message, Mapping) else None
+    if not isinstance(content, str) or not content.strip():
+        raise DeepSeekClientError("response_empty")
+    return content.strip()
+
+
 def _usage(data: Mapping[str, Any], key: str) -> int | None:
     usage = data.get("usage")
     value = usage.get(key) if isinstance(usage, Mapping) else None
@@ -176,16 +195,22 @@ class DeepSeekClient:
         max_attempts: int = 2,
         retry_backoff_seconds: float = 0.5,
         api_style: str = "anthropic",
+        provider: str = "deepseek",
     ) -> None:
         if not api_key.strip():
-            raise ValueError("DeepSeek API key is required")
-        official_model(model.strip())
+            raise ValueError("Model API key is required")
         self.api_key = api_key.strip()
         self.model = model.strip()
-        if api_style != "anthropic":
-            raise ValueError("Only the official DeepSeek provider is supported")
+        if PROVIDER_STYLES.get(provider) != api_style:
+            raise ValueError("Unsupported model provider or protocol")
+        base = (endpoint.removesuffix("/anthropic/v1/messages") if provider == "deepseek"
+                else endpoint.removesuffix("/chat/completions"))
+        validate_connection(provider, api_style, base, self.model)
+        if endpoint != completion_endpoint(provider, base):
+            raise ValueError("Unsupported model endpoint")
+        self.provider = provider
         self.api_style = api_style
-        self.endpoint = _validated_endpoint(endpoint)
+        self.endpoint = endpoint
         self.timeout = max(1.0, min(float(timeout), 180.0))
         self.max_tokens = max(128, min(int(max_tokens), 8_000))
         if reasoning_effort not in {"low", "medium", "high", "max"}:
@@ -260,7 +285,29 @@ class DeepSeekClient:
             "x-api-key": self.api_key,
         }
         endpoint = self.endpoint
-        if output_schema is not None:
+        if self.api_style == "openai":
+            instruction = system_prompt
+            if output_schema is not None:
+                chat_schema = _structured_schema(output_schema) if output_schema.get("type") == "array" else output_schema
+                instruction += ("\nReturn only a JSON object conforming to this schema: "
+                                + json.dumps(chat_schema, ensure_ascii=False))
+            payload = {
+                "model": self.model,
+                "messages": [{"role": "system", "content": instruction},
+                             {"role": "user", "content": user_prompt}],
+                "max_tokens": payload["max_tokens"],
+                "stream": False,
+            }
+            if output_schema is not None:
+                payload["response_format"] = {"type": "json_object"}
+            if self.provider in {"zhipu", "zhipu_coding"}:
+                if self.model.lower().startswith(("glm-5.2", "glm-5.3")):
+                    payload["reasoning_effort"] = self.reasoning_effort if thinking_enabled else "low"
+                elif self.model.lower().startswith(("glm-4.5", "glm-4.6", "glm-4.7", "glm-5")):
+                    payload["thinking"] = {"type": "enabled" if thinking_enabled else "disabled"}
+            headers = {"Authorization": f"Bearer {self.api_key}",
+                       "Content-Type": "application/json"}
+        elif output_schema is not None:
             endpoint = DEEPSEEK_RESPONSES
             payload = {
                 "model": self.model,
@@ -276,7 +323,20 @@ class DeepSeekClient:
         for attempt in range(1, self.max_attempts + 1):
             try:
                 data = self.transport(endpoint, headers, payload, self.timeout)
-                if output_schema is not None:
+                if self.api_style == "openai":
+                    content = _chat_content(data)
+                    if output_schema is not None:
+                        try:
+                            decoded = json.loads(content)
+                            if not isinstance(decoded, dict):
+                                raise ValueError("expected object")
+                            if output_schema.get("type") == "array":
+                                if set(decoded) != {"result"} or not isinstance(decoded["result"], list):
+                                    raise ValueError("expected array envelope")
+                                content = json.dumps(decoded["result"], ensure_ascii=False)
+                        except (ValueError, TypeError):
+                            raise DeepSeekClientError("structured_response_invalid") from None
+                elif output_schema is not None:
                     content = _structured_content(data)
                 else:
                     if data.get("stop_reason") == "max_tokens":
@@ -285,12 +345,12 @@ class DeepSeekClient:
                 return DeepSeekResponse(
                     content=content,
                     model=str(data.get("model") or self.model),
-                    input_tokens=_usage(data, "input_tokens"),
+                    input_tokens=_usage(data, "prompt_tokens" if self.api_style == "openai" else "input_tokens"),
                     cache_creation_input_tokens=_usage(
                         data, "cache_creation_input_tokens"
                     ),
                     cache_read_input_tokens=_usage(data, "cache_read_input_tokens"),
-                    output_tokens=_usage(data, "output_tokens"),
+                    output_tokens=_usage(data, "completion_tokens" if self.api_style == "openai" else "output_tokens"),
                 )
             except DeepSeekClientError as exc:
                 transient = (

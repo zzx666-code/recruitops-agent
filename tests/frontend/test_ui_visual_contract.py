@@ -22,7 +22,7 @@ class NavigationParser(HTMLParser):
         if tag == "svg" and self.current is not None:
             self.current["icons"].append(attrs)
         asset = attrs.get("src", attrs.get("href", ""))
-        if asset.startswith(("./styles.css?", "./app.js?", "./company-sources.js?", "./configuration.js?")):
+        if asset.startswith(("./styles.css?", "./swiss.css?", "./app.js?", "./company-sources.js?", "./configuration.js?")):
             self.asset_versions.append(asset.split("?v=", 1)[1])
 
     def handle_endtag(self, tag):
@@ -53,11 +53,23 @@ def test_navigation_keeps_business_routes_and_decorative_line_icons():
 
 def test_script_and_style_versions_are_updated_together():
     versions = parse_navigation().asset_versions
-    assert len(versions) == 4
-    assert versions == ["public-ui-20260924-1"] * 4
+    assert len(versions) == 5
+    assert versions == ["public-ui-20261001-9"] * 5
     html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
-    assert '<script defer src="./company-sources.js?v=public-ui-20260924-1"></script>' in html
+    assert '<script defer src="./company-sources.js?v=public-ui-20261001-9"></script>' in html
     assert 'knowledge.js' not in html
+
+
+def test_mail_workspace_keeps_saved_messages_accessible():
+    html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
+    mail = html.split('id="mail-view"', 1)[1].split('id="integrations-view"', 1)[0]
+    assert 'data-mail-view="tasks"' in mail
+    assert 'data-mail-view="inbox"' in mail
+    for element_id in (
+        "mail-total-count", "mail-list", "mail-list-count", "mail-load-more-button",
+        "mail-filter-button", "mail-refresh-button", "mail-preview",
+    ):
+        assert f'id="{element_id}"' in mail
 
 
 def test_assistant_leads_personal_navigation_and_messages_do_not_stretch():

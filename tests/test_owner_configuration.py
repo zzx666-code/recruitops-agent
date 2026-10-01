@@ -47,6 +47,29 @@ def test_secret_redaction_roundtrip_and_same_origin(owner):
     assert client.post(url + "/save", headers=headers, json={"settings": {"mail_imap_port": "oops"}}).status_code == 422
 
 
+def test_saving_configured_assistant_enables_scheduler_without_hidden_toggle(owner):
+    client, headers, _, _ = owner
+    url = "/api/local-ui/configuration"
+    response = client.post(url + "/save", headers=headers, json={"settings": {
+        "llm_enabled": True,
+        "codex_runtime_enabled": True,
+    }})
+    assert response.status_code == 200, response.text
+    assert get_settings().automation_enabled is True
+
+    response = client.post(url + "/save", headers=headers, json={"settings": {
+        "automation_enabled": False,
+    }})
+    assert response.status_code == 200, response.text
+    assert get_settings().automation_enabled is False
+
+    response = client.post(url + "/save", headers=headers, json={"settings": {
+        "mail_sync_on_startup": False,
+    }})
+    assert response.status_code == 200, response.text
+    assert get_settings().automation_enabled is False
+
+
 def upload(name, content):
     return {"filename": name, "content_base64": base64.b64encode(content.encode()).decode()}
 
@@ -160,6 +183,108 @@ def test_multiple_model_connections_are_redacted_and_active_one_becomes_effectiv
     assert settings.llm_endpoint == "https://api.deepseek.com/anthropic/v1/messages"
     stored = json.loads((root / ".data/settings/model_connections.json").read_text(encoding="utf-8"))
     assert stored["active_id"] == "backup"
+
+
+def test_switching_model_connection_rebuilds_cached_assistant(owner):
+    from apps.api import codex_bff
+
+    client, headers, _, _ = owner
+    codex_bff.get_codex_bff_service.cache_clear()
+    codex_bff.get_codex_threads.cache_clear()
+    codex_bff.get_codex_supervisor.cache_clear()
+    try:
+        old_service = codex_bff.get_codex_bff_service()
+        assert old_service.supervisor.config.model == "deepseek-flash"
+
+        response = client.post("/api/local-ui/configuration/save", headers=headers, json={
+            "settings": {},
+            "model_connections": [{
+                "id": "new-model", "name": "新连接", "provider": "deepseek",
+                "api_style": "anthropic", "base_url": "https://api.deepseek.com",
+                "model": "deepseek-v4-pro", "api_key": "fixture-key",
+            }],
+            "active_model_connection_id": "new-model",
+        })
+
+        assert response.status_code == 200, response.text
+        new_service = codex_bff.get_codex_bff_service()
+        assert new_service is not old_service
+        assert new_service.supervisor.config.model == get_settings().model_name == "deepseek-v4-pro"
+        assert new_service.supervisor.config.provider == "new-model"
+    finally:
+        codex_bff.get_codex_bff_service.cache_clear()
+        codex_bff.get_codex_threads.cache_clear()
+        codex_bff.get_codex_supervisor.cache_clear()
+
+
+def test_switching_model_connection_restarts_running_assistant(owner, monkeypatch):
+    from apps.api import codex_bff
+
+    client, headers, _, _ = owner
+    codex_bff.get_codex_bff_service.cache_clear()
+    codex_bff.get_codex_threads.cache_clear()
+    codex_bff.get_codex_supervisor.cache_clear()
+    events = []
+
+    async def fake_stop(self):
+        events.append(("stop", self.supervisor.config.model))
+        self._started = False
+
+    async def fake_start(self):
+        events.append(("start", self.supervisor.config.model))
+        self._started = True
+
+    monkeypatch.setattr(codex_bff.CodexBffService, "stop", fake_stop)
+    monkeypatch.setattr(codex_bff.CodexBffService, "start", fake_start)
+    try:
+        old_service = codex_bff.get_codex_bff_service()
+        old_service._started = True
+        response = client.post("/api/local-ui/configuration/save", headers=headers, json={
+            "settings": {"codex_runtime_enabled": True},
+            "model_connections": [{
+                "id": "new-model", "name": "新连接", "provider": "deepseek",
+                "api_style": "anthropic", "base_url": "https://api.deepseek.com",
+                "model": "deepseek-v4-pro", "api_key": "fixture-key",
+            }],
+            "active_model_connection_id": "new-model",
+        })
+        assert response.status_code == 200, response.text
+        assert events == [("stop", "deepseek-flash"), ("start", "deepseek-v4-pro")]
+    finally:
+        codex_bff.get_codex_bff_service.cache_clear()
+        codex_bff.get_codex_threads.cache_clear()
+        codex_bff.get_codex_supervisor.cache_clear()
+
+
+def test_enabling_assistant_starts_runtime_and_automation_without_api_restart(owner, monkeypatch):
+    from types import SimpleNamespace
+    from apps.api import codex_bff
+
+    client, headers, _, _ = owner
+    codex_bff.get_codex_bff_service.cache_clear()
+    codex_bff.get_codex_threads.cache_clear()
+    codex_bff.get_codex_supervisor.cache_clear()
+    started = []
+
+    async def fake_start(self):
+        started.append(self.supervisor.config.model)
+        self._started = True
+
+    monkeypatch.setattr(codex_bff.CodexBffService, "start", fake_start)
+    lifecycle = SimpleNamespace(codex_runtime_started=False)
+    monkeypatch.setattr(main.app.state, "codex_runtime_live", True, raising=False)
+    monkeypatch.setattr(main.app.state, "automation_lifecycle", lifecycle, raising=False)
+    try:
+        response = client.post("/api/local-ui/configuration/save", headers=headers, json={
+            "settings": {"llm_enabled": True, "codex_runtime_enabled": True},
+        })
+        assert response.status_code == 200, response.text
+        assert started == [get_settings().codex_model]
+        assert lifecycle.codex_runtime_started is True
+    finally:
+        codex_bff.get_codex_bff_service.cache_clear()
+        codex_bff.get_codex_threads.cache_clear()
+        codex_bff.get_codex_supervisor.cache_clear()
 
 
 def test_source_shaped_profile_is_normalized_without_persisting_unmigrated_fields(owner):
@@ -384,6 +509,57 @@ def test_import_is_idempotent_preserves_stage_and_is_atomic(owner):
     assert client.post(path, headers=headers, json=bad).status_code == 422
     with storage.session() as session:
         assert len(list(session.scalars(select(ApplicationSnapshot)))) == 1
+
+
+def test_development_manual_import_has_narrow_opt_in(owner, monkeypatch):
+    client, headers, _, storage = owner
+    path = "/api/local-ui/configuration/applications/import"
+    body = upload("applications.csv", "公司,岗位,阶段\n测试公司,工程师,笔试\n")
+    monkeypatch.setenv("RECRUITOPS_ENV", "development")
+    monkeypatch.setenv("RECRUITOPS_WRITE_ENABLED", "false")
+    monkeypatch.setenv("RECRUITOPS_LOCAL_APPLICATION_IMPORT_ENABLED", "false")
+    get_settings.cache_clear()
+    assert client.post(path, headers=headers, json=body).status_code == 403
+    monkeypatch.setenv("RECRUITOPS_LOCAL_APPLICATION_IMPORT_ENABLED", "true")
+    get_settings.cache_clear()
+    assert client.post(path, json=body).status_code == 403
+    response = client.post(path, headers=headers, json=body)
+    assert response.status_code == 200, response.text
+    assert response.json() == {"inserted": 1, "skipped": 0}
+    assert client.post(path, headers=headers, json=body).json() == {"inserted": 0, "skipped": 1}
+    assert client.post("/api/local-ui/applications/manual", headers=headers,
+                       json={"company_name": "另一家公司", "job_title": "另一岗位"}).status_code == 403
+    monkeypatch.setenv("RECRUITOPS_ENV", "production")
+    get_settings.cache_clear()
+    assert client.post(path, headers=headers, json=body).status_code == 403
+    with storage.session() as session:
+        assert len(list(session.scalars(select(ApplicationSnapshot)))) == 1
+
+
+def test_saved_mailbox_enables_manual_sync_without_global_business_writes(owner, monkeypatch):
+    client, headers, _, _ = owner
+    monkeypatch.setenv("RECRUITOPS_WRITE_ENABLED", "false")
+    monkeypatch.setenv("RECRUITOPS_MAIL_ENABLED", "false")
+    get_settings.cache_clear()
+    url = "/api/local-ui/configuration/save"
+    mailbox = {"mail_imap_host": "imap.example.test", "mail_imap_port": 993,
+               "mail_imap_username": "fixture@example.test",
+               "mail_imap_password": "synthetic-mail-secret", "mail_imap_mailbox": "INBOX"}
+    response = client.post(url, headers=headers, json={"settings": mailbox})
+    assert response.status_code == 200, response.text
+    assert get_settings().mail_enabled and get_settings().mail_sync_on_startup
+    monkeypatch.setattr(main, "_run_recruitment_mail_sync", lambda **_kwargs: {"status": "synced"})
+    assert client.post("/api/recruitment-mails/sync").json() == {"status": "synced"}
+    assert client.post(url, headers=headers, json={"settings": {
+        "mail_imap_password": "", "mail_imap_mailbox": "INBOX"}}).status_code == 200
+    assert get_settings().mail_enabled
+    changed = client.post(url, headers=headers, json={"settings": {
+        "mail_imap_username": "other@example.test", "mail_imap_password": ""}})
+    assert changed.status_code == 422
+    assert get_settings().mail_imap_username == "fixture@example.test"
+    assert client.post(url, headers=headers, json={"settings": {
+        "mail_imap_username": ""}}).status_code == 200
+    assert not get_settings().mail_enabled
 
 
 def test_custom_title_keywords_include_and_exclude():

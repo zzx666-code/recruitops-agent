@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from packages.domain.models import Application, ApplicationStage
 from packages.recruitment_mail import (
@@ -145,6 +145,21 @@ def test_mail_search_total_ignores_pagination_and_categories_exclude_other() -> 
     assert result.data.total == 2
     assert len(result.data.items) == 1
     assert result.data.items[0].company_name == "示例公司"
+
+
+def test_mail_search_filters_received_date_range() -> None:
+    store = _store()
+    store.upsert(_parsed())
+    store.upsert(_parsed().model_copy(update={
+        "identity": MailIdentity(message_id="mail-tool-september"),
+        "received_at": datetime(2026, 9, 25, tzinfo=timezone.utc),
+    }))
+
+    result = search_recruitment_mail(RecruitmentMailSearchInput(
+        start_date=date(2026, 9, 20), end_date=date(2026, 9, 28)), store)
+
+    assert result.data.total == 1
+    assert result.data.items[0].received_at.date() == date(2026, 9, 25)
 
 
 def test_mail_review_creates_approval_previews_without_writing() -> None:

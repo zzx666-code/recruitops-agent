@@ -49,7 +49,7 @@
 
 如果旧版已经爬取到岗位，或已有投递记录、招聘邮件，请先阅读[已有数据的桌面版升级步骤](docs/UPGRADE_EXISTING_DATA.md)。不要直接把旧版 `.data` 复制到不同安装路径。
 
-本版重点改进来源刷新容错、长任务成果保存、抓取效率，以及全量任务结束后的自动汇报；模型连接改为仅支持 DeepSeek 官方接口。完整范围与限制见 [v0.1.6 更新说明](docs/RELEASE_v0.1.6.md)。
+v0.1.6 改进了来源刷新容错、长任务成果保存、抓取效率和任务汇报。当前开发版的模型连接还支持智谱开放平台与智谱 Coding Plan；v0.1.6 的发布范围见 [更新说明](docs/RELEASE_v0.1.6.md)。
 
 ### 2. 完整解压
 
@@ -80,14 +80,14 @@ RecruitOps-Desktop-Preview.exe
 ### 1. 配置模型连接
 
 1. 点击 **添加连接**，或编辑已有的主连接。
-2. 使用 `DeepSeek` 官方接口（地址固定为 `https://api.deepseek.com`），填写官方 API 密钥；不再支持第三方 OpenAI 兼容服务。
-3. 选择 `deepseek-flash` 或 `deepseek-v4-pro` 并填写 API Key；官方地址不可编辑。
+2. 选择 `DeepSeek`、`智谱开放平台` 或 `智谱 Coding Plan`，并填写对应服务的 API Key。服务地址限定为界面列出的官方地址。
+3. 填写模型名称。DeepSeek 可选 `deepseek-flash` 或 `deepseek-v4-pro`；智谱可填写账户支持的模型，例如 `glm-4.5-air`、`glm-4-flash`。
 4. 点击 **测试连接**。测试会检查鉴权、模型名称、结构化输出和求职助理接口。
 5. 测试通过后点击 **保存模型连接**。
 
 可以保存多个连接，但同一时间只有一个主连接。简历解析、岗位评分、邮件理解和求职助理都使用当前主连接。
 
-旧第三方连接会停用，请重新保存 DeepSeek 官方密钥；不会把旧密钥自动发送给 DeepSeek，也不会删除业务数据。结构化解析改用官方 Responses 的 JSON Schema 约束，并保留本地字段校验与有限重试。源码改动、验证边界和发布状态见 [DeepSeek 专用接口与截断验证说明](docs/DEEPSEEK_ONLY_SCHEMA_20260925.md)。
+旧版不受支持的第三方连接会停用。切换服务时需要填写新服务的密钥；系统不会把原服务的密钥发送给新服务。DeepSeek 的结构化解析使用 Responses JSON Schema；智谱使用 Chat Completions JSON 模式。两个分支都保留本地字段校验。
 
 ### 2. 上传并分析简历
 
@@ -179,7 +179,7 @@ RecruitOps-Desktop-Preview.exe
 
 ### 第五步：处理邮件和日程
 
-进入 **招聘邮箱** 点击 **同步邮件**，或让求职助理处理未处理邮件。已成功处理的邮件会保存处理状态，后续同步不会重复执行同一事件；需要人工确认的邮件会保留在待确认列表。
+进入 **招聘邮箱** 直接查看按时间优先级排序的任务清单，展示公司、岗位、类型、时间和原邮件链接。页面会同步并自动分批整理新邮件，也可点击 **更新任务** 手动刷新。仅创建测评、笔试和面试任务；宣讲会、广告和普通通知不创建任务或日程。点击 **已完成** 或 **忽略** 后，任务移入对应页签，可以随时恢复。已处理邮件及任务状态会持久保存。
 
 邮件中的测评、笔试和面试如果包含明确日期，会生成日程；只有截止时间但没有具体开始时间的事项会以截止提醒保存；时间不明确的事项进入待办。
 
@@ -295,6 +295,12 @@ python -m pytest -c pytest-public.ini
 python -m compileall apps packages scripts
 docker compose config
 ```
+
+Docker 开发环境固定使用 `@openai/codex@0.149.0`，入口为 `/opt/codex-cli/node_modules/.bin/codex`。在 `.env` 设置 `RECRUITOPS_LLM_API_KEY` 并保存模型连接后，可将 `RECRUITOPS_CODEX_RUNTIME_ENABLED=true` 用于本地助理调试；协议诊断脚本是 `scripts/verify_codex_app_server.py`。助理领域说明位于 `AGENTS.md` 和 `.agents/skills/`。
+
+开发环境的投递记录手动导入可单独设置 `RECRUITOPS_LOCAL_APPLICATION_IMPORT_ENABLED=true`。它只开放本机同源配置页的 CSV/JSON 导入；其他业务写入仍由默认关闭的 `RECRUITOPS_WRITE_ENABLED` 控制。
+
+招聘邮箱的待办整理可单独设置 `RECRUITOPS_LOCAL_MAIL_TASKS_ENABLED=true`。它只开放本机同源页面的邮件分析、邮件来源日程创建与完成状态更新，不会修改投递阶段；其他业务写入仍保持关闭。
 
 ## 技术架构
 

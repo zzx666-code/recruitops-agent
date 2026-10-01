@@ -7,7 +7,7 @@ DEFAULT_ON_CAPABILITY_FIELDS = frozenset({
 
 CONFIG_FIELDS = frozenset({
     "llm_enabled", "job_analysis_enabled", "codex_runtime_enabled", "model_api_base_url", "llm_api_key",
-    "codex_model_provider_id", "model_provider_name", "model_api_style", "model_name",
+    "codex_model_provider_id", "model_provider_name", "model_provider", "model_api_style", "model_name",
     "offerbiu_industry_groups",
     "mail_enabled", "mail_imap_host", "mail_imap_port", "mail_imap_username",
     "mail_imap_password", "mail_imap_mailbox",

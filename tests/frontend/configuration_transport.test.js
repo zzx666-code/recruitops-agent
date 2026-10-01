@@ -28,8 +28,10 @@ test("resume and model checks allow bounded server retries to finish", async () 
   await post("save");
   assert.deepEqual(budgets, [105000, 50000, 30000]);
 });
-test("configuration offers only official DeepSeek", () => {
+test("configuration offers only approved official model endpoints", () => {
   assert.ok(!source.includes("openai-compatible"));
-  assert.ok(source.includes('base.control.readOnly = true'));
-  assert.ok(source.includes('["deepseek-flash", "deepseek-v4-pro"]'));
+  assert.ok(source.includes('const base = {wrapper: document.createElement("label"), control: document.createElement("select")}'));
+  assert.ok(source.includes('bases: ["https://api.deepseek.com"]'));
+  assert.ok(source.includes('bases: ["https://open.bigmodel.cn/api/paas/v4"]'));
+  assert.ok(source.includes('"https://open.bigmodel.cn/api/coding/paas/v4", "https://api.z.ai/api/coding/paas/v4"'));
 });

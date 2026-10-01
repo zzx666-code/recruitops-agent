@@ -204,6 +204,18 @@ def _header_message_id(message: Message, uid: str) -> tuple[str, str]:
     return f"imap:{uid}", "imap_uid_fallback"
 
 
+def _thread_reference(message: Message) -> str | None:
+    """Use the root message ID, not the unbounded References chain."""
+    value = _header_value(message, "References") or _header_value(message, "In-Reply-To")
+    if not value:
+        return None
+    match = re.search(r"<[^<>]+>", value)
+    root = match.group(0) if match else value.split()[0]
+    if len(root) > 512:
+        return "sha256:" + sha256(root.encode("utf-8")).hexdigest()
+    return root
+
+
 def _authserv_matches(authserv_id: str, trusted_ids: set[str]) -> bool:
     if authserv_id in trusted_ids:
         return True
@@ -717,7 +729,7 @@ class ImapReadOnlyConnector:
         return EmailMessage(
             identity=MailIdentity(
                 message_id=message_id,
-                thread_id=str(parsed.get("References") or "").strip() or None,
+                thread_id=_thread_reference(parsed),
                 mailbox=self.config.mailbox,
                 account_ref=account_ref,
             ),

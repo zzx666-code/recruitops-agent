@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+import os
 
 import pytest
 
@@ -139,7 +140,12 @@ def test_real_local_playwright_virtual_list_captures_middle_windows() -> None:
     """
 
     with playwright.sync_playwright() as p:
-        browser = p.chromium.launch(channel="msedge", headless=True)
+        executable = os.environ.get("RECRUITOPS_TEST_BROWSER_EXECUTABLE")
+        browser = p.chromium.launch(
+            executable_path=executable or None,
+            channel=None if executable else "msedge",
+            headless=True,
+        )
         page = browser.new_page()
         page.set_content(html)
         crawler = GenericRenderCrawler("示例", "https://jobs.example.test/campus")

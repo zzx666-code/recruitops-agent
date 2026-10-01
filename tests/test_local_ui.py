@@ -309,7 +309,7 @@ def test_record_button_does_not_use_model():
     assert 'submitAssistantQuestion' not in handler
 
 
-@pytest.mark.parametrize('path', ['/', '/index.html', '/app.js', '/styles.css'])
+@pytest.mark.parametrize('path', ['/', '/index.html', '/app.js', '/styles.css', '/swiss.css'])
 def test_mutable_web_assets_always_revalidate(path):
     client = TestClient(main.app)
     response = client.get(path)

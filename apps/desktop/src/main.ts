@@ -797,7 +797,7 @@ else {
     let size = { width: 1280, height: 800 };
     try { const saved = JSON.parse(fs.readFileSync(stateFile, 'utf8')); if (Number.isFinite(saved.width) && Number.isFinite(saved.height)) size = { width: Math.max(960, saved.width), height: Math.max(640, saved.height) }; } catch {}
     const area = screen.getPrimaryDisplay().workAreaSize;
-    window = new BrowserWindow({ width: Math.min(size.width, area.width), height: Math.min(size.height, area.height), minWidth: 960, minHeight: 640, show: false, title: 'RecruitOps Desktop Preview', backgroundColor: '#f4f6f8', webPreferences: { ...securePreferences, preload: path.join(__dirname, 'preload.js'), partition: 'shell' } });
+    window = new BrowserWindow({ width: Math.min(size.width, area.width), height: Math.min(size.height, area.height), minWidth: 960, minHeight: 640, show: false, title: 'RecruitOps Desktop Preview', backgroundColor: '#f4f4f1', webPreferences: { ...securePreferences, preload: path.join(__dirname, 'preload.js'), partition: 'shell' } });
     Menu.setApplicationMenu(null);
     const shellSession = window.webContents.session;
     denyPermissions(shellSession);

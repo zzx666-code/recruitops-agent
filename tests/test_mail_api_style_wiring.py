@@ -14,6 +14,7 @@ def test_mail_processor_forwards_api_style_to_shared_client(monkeypatch, api_sty
     settings.llm_endpoint = "https://model.example.invalid/v1"
     settings.llm_timeout_seconds = 60
     settings.model_api_style = api_style
+    settings.model_provider = "zhipu" if api_style == "openai" else "deepseek"
     constructed = []
 
     def client_factory(**kwargs):
@@ -26,6 +27,7 @@ def test_mail_processor_forwards_api_style_to_shared_client(monkeypatch, api_sty
     assert constructed == [{
         "api_key": settings.llm_api_key, "model": settings.llm_model,
         "endpoint": settings.llm_endpoint, "api_style": api_style,
+        "provider": settings.model_provider,
         "max_tokens": 4000, "timeout": 25, "max_attempts": 1,
     }]
     assert result["unchanged"] == 1

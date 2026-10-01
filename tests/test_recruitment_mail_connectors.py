@@ -81,6 +81,29 @@ def test_imap_connector_is_incremental_and_does_not_mark_mail_read() -> None:
     assert fake.logged_out is True
 
 
+def test_long_references_header_uses_bounded_root_thread_id() -> None:
+    root = b"<root@example.test>"
+    references = b" ".join([root] + [
+        f"<reply-{index:03d}@example.test>".encode() for index in range(45)
+    ])
+    raw = RAW.replace(b"Date:", b"References: " + references + b"\r\nDate:", 1)
+
+    class LongReferencesImap(FakeImap):
+        def uid(self, command, *args):
+            if command == "search":
+                return "OK", [b"11"]
+            return "OK", [(b"11 (BODY[] {10})", raw)]
+
+    connector = ImapReadOnlyConnector(
+        ImapConnectionConfig(host="imap.example.test", username="user@example.test",
+                             password="synthetic-secret"),
+        client_factory=lambda *_args: LongReferencesImap(),
+    )
+    batch = connector.fetch_since(MailCursor(mailbox="INBOX"), limit=1)
+    assert len(batch.messages) == 1
+    assert batch.messages[0].identity.thread_id == root.decode()
+
+
 def test_imap_connector_rejects_non_numeric_cursor_before_network() -> None:
     created = []
     connector = ImapReadOnlyConnector(

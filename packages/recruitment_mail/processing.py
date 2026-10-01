@@ -10,7 +10,7 @@ from dataclasses import replace
 from sqlalchemy import select
 from pydantic import ValidationError
 
-from packages.matching.client import DeepSeekClient
+from packages.matching.client import DeepSeekClient, DeepSeekClientError
 from .analysis_store import save_model_analysis, get_model_analysis, sync_analysis_labels
 from .analysis_binding import parsed_model_evidence, model_application_matches
 from .model_analysis import (
@@ -25,6 +25,7 @@ from .models import ParsedRecruitmentEmail
 
 
 DONE = {"processed_updated", "processed_unchanged", "processed", "irrelevant", "ignored"}
+TASK_DONE = {"task_processed", "task_failed_terminal"}
 TARGETS = {"application_confirmation": "applied", "assessment": "applied",
            "written_test": "written", "interview": "interview1", "offer": "offer", "rejection": "rejected"}
 
@@ -51,6 +52,8 @@ def _analysis_proposal(content, spans=None):
 
 
 def _failure_diagnostic(exc):
+    if isinstance(exc, DeepSeekClientError):
+        return {"kind": "provider", "code": exc.code}
     if isinstance(exc, ValidationError):
         # Never persist model values or raw validation messages containing mail content.
         local_cache = exc.title == "ParsedRecruitmentEmail"
@@ -95,10 +98,12 @@ def _input_digest(record, applications):
     return sha256(json.dumps(values, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def _eligible(record, input_digest=None):
+def _eligible(record, input_digest=None, *, tasks_only=False):
     if record.processing_status in DONE:
         return False
     attempt = _attempt_current(record)
+    if record.processing_status in TASK_DONE and attempt and attempt.get("state") in TASK_DONE:
+        return not tasks_only
     if not attempt:
         return True
     if input_digest is not None and attempt.get("state") != "running" and attempt.get("inputs") != input_digest:
@@ -109,11 +114,11 @@ def _eligible(record, input_digest=None):
     return (datetime.now(timezone.utc) - started).total_seconds() > 180
 
 
-def _claim(store, record, owner, input_digest):
+def _claim(store, record, owner, input_digest, *, tasks_only=False):
     with store.storage.write_transaction() as session:
         current = session.scalar(select(RecruitmentMailRecord).where(
             RecruitmentMailRecord.id == record.id).with_for_update())
-        if current is None or current.content_digest != record.content_digest or not _eligible(current, input_digest):
+        if current is None or current.content_digest != record.content_digest or not _eligible(current, input_digest, tasks_only=tasks_only):
             return False
         metadata = dict(current.raw_metadata)
         metadata["model_processing"] = {
@@ -189,19 +194,20 @@ def _mail_scope(store, record_ids):
     return records
 
 
-def _remaining_mail(store, applications, record_ids):
+def _remaining_mail(store, applications, record_ids, *, tasks_only=False):
     return [r for r in _mail_scope(store, record_ids)
-            if _eligible(r, _input_digest(r, applications))]
+            if _eligible(r, _input_digest(r, applications), tasks_only=tasks_only)]
 
 
-def _batch_outcome(summary, store, repository, record_ids):
+def _batch_outcome(summary, store, repository, record_ids, *, tasks_only=False):
     items = [r["schedule_item"] for r in summary["results"] if r.get("schedule_item")]
     summary["schedule_items_created"] = sum(bool(item["created"]) for item in items)
     summary["schedule_items_time_unconfirmed"] = sum(item["time_kind"] == "unspecified" for item in items)
     scope = _mail_scope(store, record_ids)
     applications = repository.list_applications()
-    remaining = [r for r in scope if _eligible(r, _input_digest(r, applications))]
-    unfinished = sum(r.processing_status not in DONE for r in scope)
+    remaining = [r for r in scope if _eligible(r, _input_digest(r, applications), tasks_only=tasks_only)]
+    finished_states = DONE | TASK_DONE if tasks_only else DONE
+    unfinished = sum(r.processing_status not in finished_states for r in scope)
     summary.update(remaining_count=len(remaining), has_more=bool(remaining),
                    unfinished_count=unfinished,
                    next_record_ids=[r.id for r in remaining[:50]])
@@ -212,10 +218,10 @@ def _batch_outcome(summary, store, repository, record_ids):
 
 
 def process_pending_mail(store, repository, settings, *, limit=20, record_ids=None, client=None,
-                         progress=None, should_stop=None, expected_digests=None):
+                         progress=None, should_stop=None, expected_digests=None, tasks_only=False):
     summary = {"status": "completed", "processed": 0, "updated": 0, "unchanged": 0,
                "irrelevant": 0, "unresolved": 0, "failed": 0, "notifications": 0, "reminders": 0, "results": []}
-    if not settings.write_enabled:
+    if not settings.write_enabled and not (tasks_only and settings.local_mail_tasks_enabled):
         return dict(summary, status="blocked", reason="write_disabled")
     if client is None:
         if not settings.llm_enabled or not settings.llm_api_key:
@@ -223,10 +229,11 @@ def process_pending_mail(store, repository, settings, *, limit=20, record_ids=No
         client = DeepSeekClient(api_key=settings.llm_api_key, model=settings.llm_model,
                                 endpoint=settings.llm_endpoint, max_tokens=4000,
                                 api_style=settings.model_api_style,
-                                timeout=min(settings.llm_timeout_seconds, 25), max_attempts=1)
+                                provider=settings.model_provider,
+                                timeout=min(settings.llm_timeout_seconds, 60 if tasks_only else 25), max_attempts=1)
     limit = max(1, min(limit, 50))
     applications = repository.list_applications()
-    records = _remaining_mail(store, applications, record_ids)[:limit]
+    records = _remaining_mail(store, applications, record_ids, tasks_only=tasks_only)[:limit]
     if expected_digests is not None:
         unchanged = []
         for record in records:
@@ -241,18 +248,24 @@ def process_pending_mail(store, repository, settings, *, limit=20, record_ids=No
                 unchanged.append(record)
         records = unchanged
     if not records:
-        return _batch_outcome(summary, store, repository, record_ids)
+        return _batch_outcome(summary, store, repository, record_ids, tasks_only=tasks_only)
     if should_stop and should_stop():
-        return _batch_outcome(dict(summary, status="partial", reason="stop_requested"), store, repository, record_ids)
+        return _batch_outcome(dict(summary, status="partial", reason="stop_requested"), store, repository, record_ids, tasks_only=tasks_only)
     started, owner = monotonic(), uuid4().hex
     summary["has_more"] = len(records) > 10
     if summary["has_more"]:
         summary["status"] = "partial"
     # Claim only a small batch so an interrupted call cannot monopolize the mailbox.
-    records = [r for r in records[:10] if _claim(store, r, owner, _input_digest(r, applications))]
+    records = [r for r in records[:10] if _claim(store, r, owner, _input_digest(r, applications), tasks_only=tasks_only)]
     if not records:
-        return _batch_outcome(summary, store, repository, record_ids)
+        return _batch_outcome(summary, store, repository, record_ids, tasks_only=tasks_only)
     bundle = build_batch_triage_prompt([_mail_input(r) for r in records])
+    if tasks_only:
+        bundle = replace(bundle, system_prompt=bundle.system_prompt +
+            "\nFor this task inbox, recruitment advertisements, campus presentations/seminars, "
+            "verification codes and application receipts alone are irrelevant. Keep a mail relevant "
+            "when it explicitly invites the recipient to an assessment, written test or interview, "
+            "even when the subject is a receipt.")
     if progress:
         progress({"phase": "triage", "record_ids": [r.id for r in records]})
     try:
@@ -266,13 +279,14 @@ def process_pending_mail(store, repository, settings, *, limit=20, record_ids=No
     except Exception as exc:
         diagnostic = _failure_diagnostic(exc)
         for record in records:
-            _finish(store, record, owner, "failed_terminal", "triage_" + type(exc).__name__, diagnostic=diagnostic)
+            _finish(store, record, owner, "task_failed_terminal" if tasks_only else "failed_terminal",
+                    "triage_" + type(exc).__name__, diagnostic=diagnostic)
             if progress:
                 progress({"phase": "analysis", "result": {"record_id": record.id, "state": "failed_terminal",
                           "reason": "triage_failed", "diagnostic": diagnostic}})
         return _batch_outcome(dict(summary, status="partial", failed=len(records),
                                    processed=len(records), reason="triage_failed"),
-                              store, repository, record_ids)
+                              store, repository, record_ids, tasks_only=tasks_only)
     for record in records:
         if monotonic() - started > 90 or (should_stop and should_stop()):
             _finish(store, record, owner, "pending", None)
@@ -291,11 +305,12 @@ def process_pending_mail(store, repository, settings, *, limit=20, record_ids=No
                 save_model_analysis(store, record.id, record.content_digest, MAIL_ANALYSIS_VERSION,
                                     proposal.model_dump(mode="json"), "irrelevant", getattr(client, "model", None))
                 sync_analysis_labels(store, record.id)
-                _finish(store, record, owner, "irrelevant")
+                _finish(store, record, owner, "task_processed" if tasks_only else "irrelevant")
                 summary["irrelevant"] += 1
                 result = {"record_id": record.id, "state": "irrelevant", "reason": proposal.reason}
             else:
-                result = _analyze_one(store, repository, settings, client, record, applications, owner)
+                result = _analyze_one(store, repository, settings, client, record, applications, owner,
+                                      tasks_only=tasks_only)
                 bucket = result.get("summary_bucket") or {"processed_updated": "updated", "processed_unchanged": "unchanged",
                           "processed": "notifications"}.get(result["state"], "unresolved")
                 summary[bucket] += 1
@@ -303,7 +318,8 @@ def process_pending_mail(store, repository, settings, *, limit=20, record_ids=No
         except Exception as exc:
             diagnostic = _failure_diagnostic(exc)
             reason = "analysis_" + diagnostic.get("code", type(exc).__name__)
-            _finish(store, record, owner, "failed_terminal", reason, diagnostic=diagnostic)
+            _finish(store, record, owner, "task_failed_terminal" if tasks_only else "failed_terminal",
+                    reason, diagnostic=diagnostic)
             summary["failed"] += 1
             summary["results"].append({"record_id": record.id, "state": "failed_terminal",
                                        "reason": reason, "diagnostic": diagnostic})
@@ -312,10 +328,10 @@ def process_pending_mail(store, repository, settings, *, limit=20, record_ids=No
             progress({"phase": "analysis", "result": summary["results"][-1]})
     if summary["failed"] or summary["unresolved"]:
         summary["status"] = "partial"
-    return _batch_outcome(summary, store, repository, record_ids)
+    return _batch_outcome(summary, store, repository, record_ids, tasks_only=tasks_only)
 
 
-def _analyze_one(store, repository, settings, client, record, applications, owner):
+def _analyze_one(store, repository, settings, client, record, applications, owner, *, tasks_only=False):
     from packages.tools.application_status_update import ApplicationStatusUpdateInput, update_application_status
     from .association import find_stale_company_only_match
     def check_claim():
@@ -333,6 +349,13 @@ def _analyze_one(store, repository, settings, client, record, applications, owne
     # Interpret the source independently; verify identity against ALL applications below.
     # The size of the user's application history must not bound email interpretation.
     bundle = build_full_analysis_prompt(_mail_input(record), [])
+    if tasks_only:
+        bundle = replace(bundle, system_prompt=bundle.system_prompt +
+            "\nThis is a task inbox for assessment, written_test and interview invitations. "
+            "Personality/online assessments are assessment; explicit written-test invitations are "
+            "written_test; interview invitations or confirmation/meeting arrangements are interview. "
+            "Recruitment ads and campus presentations/seminars are information, never these three "
+            "task types. Extract only the source-stated company, job and actual time/deadline.")
     spans = None
     schema = FULL_ANALYSIS_OUTPUT_SCHEMA
     if callable(getattr(client, "complete_structured", None)):
@@ -378,7 +401,13 @@ def _analyze_one(store, repository, settings, client, record, applications, owne
     confirmed = len(matches) == 1 and confirmed_binding_matches(record, matches[0]) is True
     schedule_application = matches[0] if len(matches) == 1 and (proposal.job_title or proposal.job_code) and (
         confirmed or not proposal.candidate_application_id or proposal.candidate_application_id == matches[0].id) else None
-    schedule_item = ensure_mail_schedule(store, record, proposal, owner, schedule_application)
+    schedule_item = (ensure_mail_schedule(store, record, proposal, owner, schedule_application)
+                     if not tasks_only or event in {"assessment", "written_test", "interview"} else None)
+    if tasks_only:
+        _finish(store, record, owner, "task_processed")
+        return {"record_id": record.id, "state": "task_processed", "event_type": event,
+                "summary_bucket": "reminders" if schedule_item else "notifications",
+                "schedule_item": schedule_item}
     if event in {"information", "action_required", "application_confirmation"}:
         _finish(store, record, owner, "processed")
         return {"record_id": record.id, "state": "processed", "event_type": event,

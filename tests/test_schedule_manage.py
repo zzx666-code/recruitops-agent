@@ -313,3 +313,34 @@ def test_local_ui_schedule_contract_requires_version_and_preserves_binding(
         row = session.get(ScheduleEventSnapshot, event["id"])
         assert row is not None
         assert row.application_id is None
+
+
+def test_mail_task_status_endpoint_is_source_bound_and_narrow(monkeypatch, tmp_path):
+    from apps.api import schedule_items
+    from packages.tools.schedule_manage import ScheduleManager
+
+    storage = Storage.from_url(f"sqlite+pysqlite:///{tmp_path / 'mail-task.db'}", initialize=True)
+    settings = SimpleNamespace(database_url=storage.engine.url.render_as_string(hide_password=False),
+                               local_mail_tasks_enabled=True, write_enabled=False)
+    monkeypatch.setattr(schedule_items, "get_settings", lambda: settings)
+    event = ScheduleManager(storage).create(ScheduleEventCreateFields(
+        title="Assessment", event_type="assessment", company_name="Acme"),
+        source="recruitment_mail_schedule", source_ref="mail-1").event
+    other = ScheduleManager(storage).create(ScheduleEventCreateFields(
+        title="Other", event_type="meeting", company_name="Acme"),
+        source="local_ui", source_ref="local-1").event
+    client = TestClient(main.app, base_url="http://127.0.0.1:8012")
+    headers = {"Origin": "http://127.0.0.1:8012", "X-RecruitOps-Local-UI": "1"}
+    path = f"/api/local-ui/mail-tasks/{event.id}/status"
+    body = {"status": "completed", "expected_updated_at": event.updated_at.isoformat()}
+    assert client.patch(path, json=body).status_code == 403
+    assert client.patch(f"/api/local-ui/mail-tasks/{other.id}/status", headers=headers, json=body).status_code == 404
+    assert client.patch(path, headers=headers, json={**body, "title": "Changed"}).status_code == 422
+    updated = client.patch(path, headers=headers, json=body)
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["event"]["status"] == "completed"
+    assert client.patch(path, headers=headers, json=body).status_code == 409
+    ignored = client.patch(path, headers=headers, json={"status": "ignored",
+                           "expected_updated_at": updated.json()["event"]["updated_at"]})
+    assert ignored.status_code == 200, ignored.text
+    assert ignored.json()["event"]["status"] == "ignored"

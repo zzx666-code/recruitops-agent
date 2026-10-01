@@ -80,6 +80,21 @@ def test_startup_does_not_report_failed_sync_as_completed(monkeypatch):
     assert state.startup_mail_sync_status == "failed"
 
 
+def test_manual_sync_forces_refresh_past_ttl(monkeypatch):
+    from apps.api import main as api
+    from packages.recruitment_mail import freshness
+
+    calls = []
+    monkeypatch.setattr(api, "get_settings", lambda: SimpleNamespace(mail_enabled=True))
+    monkeypatch.setattr(api, "recruitment_mail_store", lambda: object())
+    monkeypatch.setattr(freshness, "ensure_mail_fresh", lambda *args, **kwargs: (
+        calls.append(kwargs) or {"status": "synced", "sync": {"fetched": 0}}
+    ))
+
+    assert api.sync_recruitment_mails(limit=100)["status"] == "synced"
+    assert calls == [{"limit": 100, "force": True}]
+
+
 def test_freshness_uses_ttl_singleflight_cache(monkeypatch):
     from packages.recruitment_mail import freshness
     from packages.recruitment_mail.sync import RecruitmentMailSyncResult

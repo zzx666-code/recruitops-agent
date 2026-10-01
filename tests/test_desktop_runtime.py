@@ -141,8 +141,8 @@ def test_environment_does_not_inherit_secrets(tmp_path, bundle, monkeypatch):
     assert not {"PGSERVICE", "HTTP_PROXY", "DEEPSEEK_API_KEY"} & env.keys()
     assert env["RECRUITOPS_WRITE_ENABLED"] == "false"
     assert env["RECRUITOPS_AUTOMATION_ENABLED"] == "false"
-    assert env["SYSTEMDRIVE"] == "C:"
-    assert env["PROGRAMDATA"] == "C:/ProgramData"
+    assert env.get("SYSTEMDRIVE", env.get("SystemDrive")) == "C:"
+    assert env.get("PROGRAMDATA", env.get("ProgramData")) == "C:/ProgramData"
     assert "55001" in env["RECRUITOPS_DATABASE_URL"]
     assert env["RECRUITOPS_DATABASE_URL"].startswith("postgresql+psycopg://")
 

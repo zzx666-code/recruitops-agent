@@ -45,7 +45,7 @@ def test_application_browse_progress_and_human_mail_binding(width, tmp_path):
         assert url.netloc == "ui.example.test", "No real network or mail service permitted"
         calls.append((request.method, url.path, url.query, request.post_data))
         filename = url.path.lstrip("/") or "index.html"
-        if filename in {"index.html", "app.js", "configuration.js", "company-sources.js", "styles.css"}:
+        if filename in {"index.html", "app.js", "configuration.js", "company-sources.js", "styles.css", "swiss.css"}:
             content_type = "text/html" if filename.endswith("html") else "text/css" if filename.endswith("css") else "application/javascript"
             return route.fulfill(body=(WEB / filename).read_text(encoding="utf-8"), content_type=content_type)
         if url.path == "/health":
@@ -111,7 +111,10 @@ def test_application_browse_progress_and_human_mail_binding(width, tmp_path):
         return route.fulfill(status=503, json={"detail": "Offline fixture only"})
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(channel=os.environ.get("RECRUITOPS_TEST_BROWSER_CHANNEL") or None)
+        browser = playwright.chromium.launch(
+            channel=os.environ.get("RECRUITOPS_TEST_BROWSER_CHANNEL") or None,
+            executable_path=os.environ.get("RECRUITOPS_TEST_BROWSER_EXECUTABLE") or None,
+        )
         context = browser.new_context(viewport={"width": width, "height": 1000}, service_workers="block")
         context.route("**/*", route_request)
         page = context.new_page()
@@ -125,15 +128,18 @@ def test_application_browse_progress_and_human_mail_binding(width, tmp_path):
 
         navigate("applications")
         expect(page.locator("#application-stage-filter")).to_have_count(0)
-        expect(page.locator(".application-card")).to_have_count(74)
-        expect(page.locator("#application-page-description")).to_have_text("共 106 条 · 已显示 74 条")
-        expect(page.locator(".kanban-column--written .application-card")).to_have_count(3)
-        expect(page.locator(".kanban-column--interview .application-card")).to_have_count(1)
-        expect(page.locator(".kanban-column--closed .application-card")).to_have_count(20)
-        page.locator('[data-application-more="applied"]').click()
+        expect(page.locator(".application-card")).to_have_count(50)
+        expect(page.locator("#application-page-description")).to_have_text("共 106 条 · 已显示 50 条")
+        page.locator("[data-application-more]").click()
+        expect(page.locator(".application-card")).to_have_count(100)
+        expect(page.locator("#application-page-description")).to_have_text("共 106 条 · 已显示 100 条")
+        page.locator("[data-application-more]").click()
         expect(page.locator(".application-card")).to_have_count(106)
         expect(page.locator("#application-page-description")).to_have_text("共 106 条 · 已显示 106 条")
-        expect(page.locator('[data-application-more="applied"]')).to_have_count(0)
+        expect(page.locator("[data-application-more]")).to_have_count(0)
+        page.locator(".application-summary-item--applied").click()
+        expect(page.locator(".application-card")).to_have_count(50)
+        expect(page.locator("#application-page-description")).to_have_text("共 82 条 · 已显示 50 条")
         page.locator("#application-search").fill("离线岗位052")
         expect(page.locator(".application-card")).to_have_count(1)
         expect(page.locator("#application-page-description")).to_have_text("匹配 1 条 · 已显示 1 条")
@@ -142,10 +148,11 @@ def test_application_browse_progress_and_human_mail_binding(width, tmp_path):
         page.locator("#application-search").fill("没有此岗位")
         expect(page.locator("#application-kanban")).to_contain_text("没有匹配的投递记录")
         page.locator('#application-filter-form button[type="reset"]').click()
-        expect(page.locator(".application-card")).to_have_count(74)
-        expect(page.locator(".kanban-column--written .application-card")).to_have_count(3)
-        expect(page.locator(".kanban-column--interview .application-card")).to_have_count(1)
-        expect(page.locator(".kanban-column--closed .application-card")).to_have_count(20)
+        expect(page.locator(".application-card")).to_have_count(50)
+        expect(page.locator("#application-page-description")).to_have_text("共 82 条 · 已显示 50 条")
+        page.locator(".application-summary-item--applied").click()
+        expect(page.locator(".application-card")).to_have_count(50)
+        expect(page.locator("#application-page-description")).to_have_text("共 106 条 · 已显示 50 条")
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         application_capture = tmp_path / f"applications-{width}.png"
         page.screenshot(path=str(application_capture), animations="disabled")
@@ -167,8 +174,10 @@ def test_application_browse_progress_and_human_mail_binding(width, tmp_path):
         expect(page.locator("#assistant-more-task-progress .assistant-task-progress")).to_have_count(0)
 
         navigate("mail")
+        page.locator('[data-mail-view="inbox"]').click()
         expect(page.locator("#mail-list")).to_contain_text("待确认投递")
         expect(page.locator("#mail-list")).not_to_contain_text("0%")
+        page.locator("#mail-list .mail-row-advanced summary").click()
         page.get_by_role("button", name="关联投递", exact=True).click()
         expect(page.locator("#job-detail-dialog")).to_be_visible()
         page.get_by_role("button", name="选择并查看确认预览", exact=True).click()

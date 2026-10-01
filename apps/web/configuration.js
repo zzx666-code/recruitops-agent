@@ -13,7 +13,11 @@
   const CAPABILITY_FIELDS = ["vision_enabled"];
   const split = (value) => value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const MODEL_PRESETS = {
-    deepseek: {label: "DeepSeek", api_style: "anthropic", base_url: "https://api.deepseek.com", model: "deepseek-flash"},
+    deepseek: {label: "DeepSeek", api_style: "anthropic", bases: ["https://api.deepseek.com"], model: "deepseek-flash"},
+    zhipu: {label: "智谱开放平台", api_style: "openai", bases: ["https://open.bigmodel.cn/api/paas/v4"], model: "glm-4.5-air"},
+    zhipu_coding: {label: "智谱 Coding Plan", api_style: "openai", bases: [
+      "https://open.bigmodel.cn/api/coding/paas/v4", "https://api.z.ai/api/coding/paas/v4",
+    ], model: "glm-5.3-flash"},
   };
   const degreeOption = (value) => {
     const text = String(value || "");
@@ -135,27 +139,38 @@
         const option = document.createElement("option"); option.value = value; option.textContent = preset.label;
         provider.append(option);
       }
-      provider.value = "deepseek"; provider.disabled = true;
-      const providerHint = document.createElement("small"); providerHint.textContent = "仅支持 DeepSeek 官方服务，助理、解析与评分统一使用。";
+      provider.value = connection.provider || "deepseek";
+      const providerHint = document.createElement("small"); providerHint.textContent = "主连接用于助理、解析、评分和邮件；截图识别还要求模型支持图片。";
       providerLabel.append(providerCaption, provider, providerHint);
-      const base = input("API 服务地址", "base_url", "url", "固定使用 DeepSeek 官方地址。"); base.control.value = MODEL_PRESETS.deepseek.base_url; base.control.readOnly = true;
-      const model = {wrapper: document.createElement("label"), control: document.createElement("select")};
-      model.wrapper.append(document.createTextNode("模型名称"));
-      model.control.dataset.modelField = "model";
-      for (const value of ["deepseek-flash", "deepseek-v4-pro"]) {
-        const option = document.createElement("option"); option.value = value; option.textContent = value;
-        model.control.append(option);
-      }
-      model.control.value = connection.model || MODEL_PRESETS.deepseek.model;
-      model.wrapper.append(model.control);
+      const base = {wrapper: document.createElement("label"), control: document.createElement("select")};
+      base.wrapper.append(document.createTextNode("API 服务地址"));
+      base.control.dataset.modelField = "base_url";
+      const baseHint = document.createElement("small"); baseHint.textContent = "仅允许所选服务的官方地址。";
+      base.wrapper.append(base.control, baseHint);
+      const model = input("模型名称", "model", "text", "智谱模型名称可按账号权限填写；DeepSeek 支持 deepseek-flash / deepseek-v4-pro。");
+      model.control.maxLength = 200;
+      const applyPreset = (value, preferredBase, preferredModel) => {
+        const preset = MODEL_PRESETS[value];
+        base.control.replaceChildren();
+        for (const address of preset.bases) {
+          const option = document.createElement("option"); option.value = address; option.textContent = address;
+          base.control.append(option);
+        }
+        base.control.value = preset.bases.includes(preferredBase) ? preferredBase : preset.bases[0];
+        model.control.value = preferredModel || preset.model;
+      };
+      applyPreset(provider.value, connection.base_url, connection.model);
       const key = input("API 密钥", "api_key", "password", "已保存时留空表示不修改。");
       key.control.value = connection.api_key || "";
       key.control.placeholder = connection.key_configured ? "已保存，留空不修改" : "请输入 API 密钥";
       provider.addEventListener("change", () => {
-        const preset = MODEL_PRESETS[provider.value];
-        if (provider.value === "deepseek") {
-          base.control.value = preset.base_url; model.control.value = preset.model;
-        }
+        applyPreset(provider.value);
+        key.control.value = ""; key.control.placeholder = "请填写该服务的 API 密钥";
+        connection.key_configured = false; state.textContent = "待配置";
+      });
+      base.control.addEventListener("change", () => {
+        key.control.value = ""; key.control.placeholder = "请填写该地址对应的 API 密钥";
+        connection.key_configured = false; state.textContent = "待配置";
       });
       const actions = document.createElement("div"); actions.className = "model-connection-actions";
       const test = document.createElement("button"); test.type = "button"; test.className = "button button--secondary"; test.textContent = "测试连接";
@@ -226,7 +241,7 @@
       renderReadiness(payload);
       workingProfile = structuredClone(payload.profile);
       modelConnections = payload.model_connections.map((item) => ({...item}));
-      inlineMessage("model-connection-message", payload.model_migration_required ? "旧连接不是受支持的 DeepSeek 官方连接，已停止使用。请重新填写官方密钥；岗位和简历数据不受影响。" : "", Boolean(payload.model_migration_required));
+      inlineMessage("model-connection-message", payload.model_migration_required ? "旧模型连接未通过当前服务地址校验，已停止使用。请重新选择服务并填写密钥；岗位和简历数据不受影响。" : "", Boolean(payload.model_migration_required));
       activeModelConnectionId = payload.active_model_connection_id;
       renderModelConnections();
       for (const [key, value] of Object.entries(payload.settings)) {
@@ -319,7 +334,8 @@
       key_configured: modelConnections.find((saved) => saved.id === item.id)?.key_configured || false,
     }));
     const id = `model-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
-    modelConnections.push({id, name: "备用 DeepSeek 连接", provider: "deepseek", ...MODEL_PRESETS.deepseek, key_configured: false});
+    modelConnections.push({id, name: "备用模型连接", provider: "deepseek", api_style: "anthropic",
+      base_url: MODEL_PRESETS.deepseek.bases[0], model: MODEL_PRESETS.deepseek.model, key_configured: false});
     renderModelConnections();
     inlineMessage("model-connection-message", "已添加备用连接，请填写后保存。", false);
   });

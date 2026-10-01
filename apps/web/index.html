@@ -3,26 +3,27 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#f2f7ff">
+    <meta name="theme-color" content="#f4f4f1">
     <title>秋招工作台 | RecruitOps Agent</title>
-    <link rel="stylesheet" href="./styles.css?v=public-ui-20260924-1">
-    <script defer src="./app.js?v=public-ui-20260924-1"></script>
-    <script defer src="./company-sources.js?v=public-ui-20260924-1"></script>
-    <script defer src="./configuration.js?v=public-ui-20260924-1"></script>
+    <link rel="stylesheet" href="./styles.css?v=public-ui-20261001-9">
+    <link rel="stylesheet" href="./swiss.css?v=public-ui-20261001-9">
+    <script defer src="./app.js?v=public-ui-20261001-9"></script>
+    <script defer src="./company-sources.js?v=public-ui-20261001-9"></script>
+    <script defer src="./configuration.js?v=public-ui-20261001-9"></script>
   </head>
   <body>
     <div class="app-shell">
       <aside class="sidebar" id="sidebar" aria-label="主导航">
         <div class="brand-block">
-          <div class="brand-mark" aria-hidden="true">R</div>
+          <div class="brand-mark" aria-hidden="true">Job</div>
           <div>
             <p class="brand-name">秋招工作台</p>
-            <p class="brand-caption">发现机会，稳步推进</p>
+            <p class="brand-caption">lota/2027</p>
           </div>
+          <button class="sidebar-close-button" id="sidebar-close-button" type="button" aria-label="关闭导航">×</button>
         </div>
 
         <nav class="primary-nav" aria-label="工作台导航">
-          <button class="nav-item" type="button" data-view="configuration"><span class="nav-symbol" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 7h16M4 17h16"></path><circle cx="8" cy="7" r="3" fill="white"></circle><circle cx="16" cy="17" r="3" fill="white"></circle></svg></span><span>配置</span></button>
           <p class="nav-group-label">发现</p>
           <button class="nav-item is-active" type="button" data-view="jobs" data-job-nav-mode="all">
             <span class="nav-symbol" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" stroke="currentColor" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="2"></rect><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></span>
@@ -80,6 +81,8 @@
             </button>
           </div>
         </details>
+
+        <button class="nav-item configuration-nav-item" type="button" data-view="configuration"><span class="nav-symbol" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 7h16M4 17h16"></path><circle cx="8" cy="7" r="3" fill="white"></circle><circle cx="16" cy="17" r="3" fill="white"></circle></svg></span><span>配置</span></button>
 
         <div class="sidebar-footer">
           <div class="read-only-note">
@@ -344,7 +347,7 @@
               <input id="application-search" type="search" maxlength="200" placeholder="搜索公司名称或岗位名称" autocomplete="off">
               <button class="button button--ghost" type="reset">重置</button>
             </form>
-            <div class="application-summary" id="application-summary" aria-label="投递漏斗"></div>
+            <div class="application-summary" id="application-summary" aria-label="投递阶段筛选"></div>
             <div class="application-kanban" id="application-kanban" data-state="loading"><div class="loading-rows" aria-label="加载中"><span></span><span></span><span></span></div></div>
           </section>
 
@@ -680,47 +683,63 @@
             </div>
           </section>
 
-          <section class="view-panel" id="mail-view" data-view-panel="mail" aria-labelledby="mail-heading" hidden>
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">只读邮件情报</p>
-                <h2 id="mail-heading">招聘邮箱</h2>
-                <p class="section-description">查看已同步的招聘邮件；关联与日程变更只生成审批预览。</p>
-              </div>
-              <button class="button button--secondary" type="button" id="mail-refresh-button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" stroke="currentColor" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14.7-3.9L4 9M4 5v4h4M4 13a8 8 0 0 0 14.7 3.9L20 15M20 19v-4h-4"></path></svg>同步邮件</button>
+          <section class="view-panel mail-workspace" id="mail-view" data-view-panel="mail" aria-labelledby="mail-heading" hidden>
+            <header class="mail-workspace-header">
+              <div><h2 id="mail-heading">招聘邮箱</h2><p>把下一步要做的事，放在一起。</p></div>
+              <button class="button button--secondary" type="button" id="mail-process-button">更新任务</button>
+            </header>
+            <div class="mail-view-switcher" role="group" aria-label="招聘邮箱视图">
+              <button type="button" data-mail-view="tasks" aria-pressed="true">任务清单</button>
+              <button type="button" data-mail-view="inbox" aria-pressed="false">全部邮件 <span id="mail-total-count">—</span></button>
             </div>
-            <div class="mail-status-stack" aria-live="polite">
-              <div class="mail-sync-status" id="mail-sync-status" data-state="idle" hidden>
-                <span class="mail-status-indicator" aria-hidden="true"></span>
-                <div><strong id="mail-sync-status-title">等待同步</strong><span id="mail-sync-status-detail">手动同步结果会显示在这里。</span></div>
+            <div id="mail-tasks-panel">
+            <div class="mail-workspace-toolbar">
+              <div class="mail-task-tabs" role="group" aria-label="任务状态">
+                <button type="button" data-mail-status="pending" aria-pressed="true">待办 <span id="mail-pending-count">0</span></button>
+                <button type="button" data-mail-status="completed" aria-pressed="false">已完成 <span id="mail-completed-count">0</span></button>
+                <button type="button" data-mail-status="ignored" aria-pressed="false">已忽略 <span id="mail-ignored-count">0</span></button>
               </div>
-              <div class="mail-freshness-note" id="mail-freshness-note" data-state="unknown" hidden>
-                <span class="mail-status-indicator" aria-hidden="true"></span>
-                <div><strong id="mail-freshness-title">邮箱数据状态</strong><span id="mail-freshness-detail"></span></div>
-              </div>
+              <button class="mail-sort-caption mail-sort-control mail-sort-control--compact" type="button" data-mail-time-sort>时间升序 ↑</button>
             </div>
-            <div class="company-metrics" aria-label="招聘邮件摘要">
-              <div><span>当前列表</span><strong id="mail-total-count">—</strong></div>
-              <div><span>待确认</span><strong id="mail-confirm-count">—</strong></div>
-              <div><span>已关联</span><strong id="mail-linked-count">—</strong></div>
+            <div class="mail-process-notice" id="mail-process-status" data-state="idle" role="status" hidden>
+              <strong id="mail-process-status-title"></strong><span id="mail-process-status-detail"></span>
             </div>
-            <section class="workspace-section" aria-labelledby="mail-list-heading">
-              <div class="section-heading section-heading--compact">
-                <div><p class="eyebrow">本地解析结果</p><h3 id="mail-list-heading">邮件列表</h3></div>
-                <span class="muted-label" id="mail-list-count">加载中</span>
-              </div>
-              <div class="mail-list" id="mail-list" data-state="loading">
-                <div class="loading-rows" aria-label="加载中"><span></span><span></span><span></span></div>
-              </div>
+            <section class="mail-task-board" aria-label="招聘任务清单">
+              <div class="mail-task-columns"><span aria-hidden="true"></span><span>公司 / 岗位</span><span>类型</span><button class="mail-sort-control" type="button" data-mail-time-sort>时间 ↑</button><span>邮件</span><span>操作</span></div>
+              <div id="mail-task-list" aria-live="polite"></div>
             </section>
-            <section class="workspace-section" aria-labelledby="mail-preview-heading">
-              <div class="section-heading section-heading--compact">
-                <div><p class="eyebrow">人工确认前</p><h3 id="mail-preview-heading">关联预览</h3></div>
+            <p class="mail-workspace-footnote">测评 · 笔试 · 面试。宣讲会与广告不进入任务清单。</p>
+            </div>
+            <div id="mail-inbox-panel" hidden>
+              <div class="mail-inbox-heading">
+                <div><h3 id="mail-list-heading">全部邮件</h3><p>查看本机已保存的招聘邮件。顶部数字为邮件总数，任务清单只显示需要行动的事项。</p></div>
+                <button class="button button--secondary" type="button" id="mail-refresh-button">同步邮件</button>
               </div>
-              <div class="task-result" id="mail-preview" data-state="empty">
-                <div class="empty-state empty-state--inline"><strong>尚未选择邮件</strong><span>选择一封邮件生成投递阶段与日程草稿。</span></div>
+              <div class="mail-status-stack" aria-live="polite">
+                <div class="mail-sync-status" id="mail-sync-status" data-state="idle" hidden>
+                  <span class="mail-status-indicator" aria-hidden="true"></span>
+                  <div><strong id="mail-sync-status-title"></strong><span id="mail-sync-status-detail"></span></div>
+                </div>
+                <div class="mail-freshness-note" id="mail-freshness-note" data-state="unknown" hidden>
+                  <span class="mail-status-indicator" aria-hidden="true"></span>
+                  <div><strong id="mail-freshness-title"></strong><span id="mail-freshness-detail"></span></div>
+                </div>
               </div>
-            </section>
+              <div class="mail-inbox-filters">
+                <label>开始日期<input type="date" id="mail-start-date"></label>
+                <label>结束日期<input type="date" id="mail-end-date"></label>
+                <label>类型<select id="mail-category-filter"><option value="">全部类型</option><option value="application_confirmation">投递确认</option><option value="assessment">测评</option><option value="written_test">笔试</option><option value="interview">面试</option><option value="offer">Offer</option><option value="rejection">未通过</option><option value="other">其他</option></select></label>
+                <button class="button button--secondary" type="button" id="mail-filter-button">筛选</button>
+                <button class="button button--ghost" type="button" id="mail-clear-filter-button">重置</button>
+              </div>
+              <div class="mail-inbox-count" id="mail-list-count">加载中</div>
+              <div class="mail-list" id="mail-list" data-state="loading"><div class="loading-rows" aria-label="加载中"><span></span><span></span><span></span></div></div>
+              <button class="button button--secondary mail-load-more" type="button" id="mail-load-more-button" hidden>加载更多邮件</button>
+              <section class="workspace-section" aria-labelledby="mail-preview-heading">
+                <div class="section-heading section-heading--compact"><div><p class="eyebrow">人工确认前</p><h3 id="mail-preview-heading">关联预览</h3></div></div>
+                <div class="task-result" id="mail-preview" data-state="empty"><div class="empty-state empty-state--inline"><strong>尚未选择邮件</strong><span>选择一封邮件生成投递阶段与日程草稿。</span></div></div>
+              </section>
+            </div>
           </section>
 
           <section class="view-panel" id="integrations-view" data-view-panel="integrations" aria-labelledby="integrations-heading" hidden>
@@ -748,6 +767,11 @@
               </div>
             </section>
           </section>
+
+          <footer class="app-footer">
+            <div><strong>RecruitOps</strong><span>让每一次求职推进都有清晰的下一步。</span></div>
+            <span>数据保存在本机</span>
+          </footer>
         </div>
       </main>
     </div>

@@ -5,7 +5,7 @@ import ipaddress
 import re
 
 from packages.user_settings import DEFAULT_ON_CAPABILITY_FIELDS
-from packages.model_policy import official_base, official_model
+from packages.model_policy import validate_connection
 
 from . import RuntimeFailure
 
@@ -17,15 +17,20 @@ CAPABILITY_FIELDS = (
 
 
 def saved_model_configured(settings):
-    """Official saved connection only; legacy third-party keys stay disabled."""
+    """Only a complete, approved saved connection enables model calls."""
     if not isinstance(settings, dict) or settings.get("model_api_style") not in ("anthropic", "openai"):
         return False
     if not all(isinstance(settings.get(name), str) and settings[name].strip()
                for name in ("llm_api_key", "model_name", "model_api_base_url")):
         return False
     try:
-        official_base(settings["model_api_base_url"])
-        official_model(settings["model_name"])
+        provider = settings.get("model_provider", "deepseek")
+        style = settings["model_api_style"]
+        if provider == "deepseek" and style == "openai":
+            style = "anthropic"  # Legacy saved DeepSeek connections migrate on load.
+        validate_connection(provider,
+                            style, settings["model_api_base_url"],
+                            settings["model_name"])
         return True
     except ValueError:
         return False

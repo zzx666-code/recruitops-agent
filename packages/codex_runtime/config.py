@@ -5,7 +5,8 @@ import json
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from packages.model_policy import official_base, official_model
+from packages.model_policy import MODEL_NAME_RE, official_base, official_model
+from urllib.parse import urlsplit
 
 
 class RestartPolicy(StrEnum):
@@ -88,8 +89,18 @@ class CodexHomeConfig(BaseModel):
         return names
 
     def render_toml(self) -> str:
-        official_base(self.base_url)
-        official_model(self.model)
+        parsed = urlsplit(self.base_url)
+        local_adapter = (parsed.scheme == "http" and parsed.hostname == "127.0.0.1"
+                         and parsed.port is not None and 1 <= parsed.port <= 65535
+                         and parsed.path == "/api/codex-model"
+                         and not parsed.username and not parsed.password
+                         and not parsed.query and not parsed.fragment)
+        if local_adapter:
+            if not MODEL_NAME_RE.fullmatch(self.model):
+                raise ValueError("Invalid model name")
+        else:
+            official_base(self.base_url)
+            official_model(self.model)
         if self.model_auto_compact_token_limit >= self.model_context_window:
             raise ValueError("auto-compaction limit must be smaller than the model context window")
         quote = lambda value: json.dumps(value, ensure_ascii=False)

@@ -28,7 +28,7 @@ test('hidden desktop workbench refreshes the current section and confirms deleti
     if(url.origin!==origin)return route.abort();
     const file=url.pathname==='/'?'index.html':url.pathname.slice(1);
     if(file==='index.html')documentLoads++;
-    if(['index.html','app.js','configuration.js','knowledge.js','company-sources.js','styles.css'].includes(file))
+    if(['index.html','app.js','configuration.js','knowledge.js','company-sources.js','styles.css','swiss.css'].includes(file))
       return route.fulfill({contentType:file.endsWith('html')?'text/html; charset=utf-8':file.endsWith('css')?'text/css':'text/javascript',body:fs.readFileSync(path.join(web,file))});
     if(url.pathname==='/health')return route.fulfill({json:{status:'ok',mode:'anonymous-test'}});
     if(url.pathname==='/api/codex/health')return route.fulfill({json:{enabled:false,ready:false}});

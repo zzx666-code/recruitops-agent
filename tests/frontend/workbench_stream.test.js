@@ -117,7 +117,18 @@ class FakeElement {
     }
   }
 
-  addEventListener() {}
+  addEventListener(type, handler) {
+    this._listeners ??= {};
+    (this._listeners[type] ??= []).push(handler);
+  }
+
+  click() {
+    (this._listeners?.click || []).forEach(handler => handler({ stopPropagation() {}, target: this }));
+  }
+
+  getAttribute(name) {
+    return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null;
+  }
 
   querySelector(selector) {
     return this.querySelectorAll(selector)[0] || null;
@@ -139,6 +150,12 @@ function matchesSelector(node, selector) {
   if (selector === ".message") return node.className.split(/\s+/).includes("message");
   if (selector === ".message-copy") return node.className.split(/\s+/).includes("message-copy");
   if (selector === ".status-dot") return node.className.split(/\s+/).includes("status-dot");
+  if (selector.startsWith(".")) {
+    const className = selector.slice(1);
+    if (className && !className.includes(".") && !className.includes(" ")) {
+      return node.className.split(/\s+/).includes(className);
+    }
+  }
   const status = selector.match(/^\[data-codex-status="([^"]+)"\]$/);
   if (status) return node.dataset.codexStatus === status[1];
   return selector.toUpperCase() === node.tagName;
@@ -667,7 +684,7 @@ test("reconnects on the same thread and ignores replayed events", async () => {
     },
   ]);
   const calls = [];
-  const { hooks } = loadApp(async (url, options = {}) => {
+  const { document, hooks } = loadApp(async (url, options = {}) => {
     calls.push({ url, options });
     if (options.method === "POST") return firstResponse;
     assert.equal(options.method, "GET");
@@ -682,6 +699,62 @@ test("reconnects on the same thread and ignores replayed events", async () => {
   assert.equal(task.answer, "AB");
   assert.deepEqual(Array.from(task.codex_events, (event) => event.event_type), ["turn", "turn_completed"]);
   assert.equal(Array.from(task.codex_events).filter((event) => event.event_type === "turn_completed").length, 1);
+  assert.doesNotMatch(document.getElementById("assistant-status").textContent, /Codex/);
+});
+
+test("replaces an expired saved thread and retries the original request once", async () => {
+  const completed = streamResponse([{
+    value: bytes([
+      frame("turn", { id: "turn-2", thread_id: "thread-2" }),
+      frame("text_delta", turnEventPayload("text_delta", "event-1", { thread_id: "thread-2", turn_id: "turn-2", text: "OK" })),
+      frame("turn_completed", turnEventPayload("turn_completed", "event-2", { thread_id: "thread-2", turn_id: "turn-2" })),
+    ].join("")),
+    done: false,
+  }]);
+  const calls = [];
+  const { hooks } = loadApp(async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith("/thread-1/turns/stream")) {
+      return jsonResponse({ detail: "assistant_thread_expired: 保存的求职助理会话已失效" }, 409);
+    }
+    if (url === "/api/codex/threads") return jsonResponse({ id: "thread-2" });
+    if (url.endsWith("/thread-2/turns/stream")) return completed;
+    throw new Error(`unexpected request: ${url}`);
+  });
+
+  const task = await hooks.runCodexAssistantQuery("继续", "", "");
+
+  assert.equal(task.answer, "OK");
+  assert.equal(hooks.state.codexThreadId, "thread-2");
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/codex/threads/thread-1/turns/stream",
+    "/api/codex/threads",
+    "/api/codex/threads/thread-2/turns/stream",
+  ]);
+});
+
+test("replaces an expired thread while restoring the conversation workspace", async () => {
+  const calls = [];
+  const { document, hooks } = loadApp(async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url === "/api/codex/threads/thread-1") {
+      return jsonResponse({ detail: "assistant_thread_expired: 保存的求职助理会话已失效" }, 409);
+    }
+    if (url === "/api/codex/threads" && options.method === "POST") {
+      return jsonResponse({ id: "thread-2" });
+    }
+    if (url === "/api/codex/threads?limit=20") {
+      return jsonResponse({ data: [{ id: "thread-2", turn_count: 0 }], next_cursor: null });
+    }
+    throw new Error(`unexpected request: ${url}`);
+  });
+
+  const restored = await hooks.loadConversation("thread-1");
+
+  assert.equal(restored, true);
+  assert.equal(hooks.state.codexThreadId, "thread-2");
+  assert.match(document.getElementById("assistant-message-status").textContent, /已自动新建会话/);
+  assert.doesNotMatch(document.getElementById("assistant-view").textContent, /Codex/);
 });
 
 test("cancellation leaves one stopped, non-streaming assistant message", async () => {
@@ -1002,7 +1075,7 @@ test("reports a successful mail sync without invoking association or application
   assert.match(document.getElementById("mail-sync-status-detail").textContent, /新增 2 封/);
   assert.deepEqual(calls.map((call) => call.url), [
     "/api/recruitment-mails/sync?limit=100",
-    "/api/recruitment-mails?limit=50&refresh=false",
+    "/api/recruitment-mails?limit=50&offset=0&refresh=false",
   ]);
   assert.equal(calls[0].options.method, "POST");
   assert.ok(calls.every((call) => !call.url.includes("/review") && !call.url.includes("/applications")));
@@ -1020,6 +1093,19 @@ test("distinguishes a no-new sync from success", async () => {
   assert.equal(status.dataset.state, "no-new");
   assert.match(document.getElementById("mail-sync-status-title").textContent, /已是最新/);
   assert.match(document.getElementById("mail-sync-status-detail").textContent, /没有新邮件/);
+});
+
+test("treats an already completed concurrent mail sync as successful", async () => {
+  const { document, hooks } = loadApp(async (url) => {
+    if (url.includes("/sync?")) return jsonResponse({ status: "cached", sync: { fetched: 100, inserted: 100, reused: 0 } });
+    return jsonResponse({ items: [mailFixture()], freshness: { status: "cached" } });
+  });
+
+  await hooks.syncRecruitmentMails();
+
+  assert.equal(document.getElementById("mail-sync-status").dataset.state, "no-new");
+  assert.match(document.getElementById("mail-sync-status-title").textContent, /最近已同步/);
+  assert.doesNotMatch(document.getElementById("mail-sync-status-detail").textContent, /新增 100 封|失败/);
 });
 
 test("keeps cached mail visible and warns when sync returns failed freshness", async () => {
@@ -1041,6 +1127,109 @@ test("keeps cached mail visible and warns when sync returns failed freshness", a
   assert.match(document.getElementById("mail-freshness-detail").textContent, /不是最新/);
   assert.match(document.getElementById("mail-list").textContent, /本地缓存的面试邮件/);
   assert.match(document.getElementById("mail-sync-status-detail").textContent, /TimeoutError/);
+});
+
+test("mail checklist shows only assessment, written test and interview with completion and ignore actions", () => {
+  const { document, hooks } = loadApp(async () => jsonResponse({}));
+  hooks.state.allSchedules = [
+    scheduleFixture({ id: "seminar", source: "recruitment_mail_schedule", event_type: "宣讲会" }),
+    scheduleFixture({ id: "future", source: "recruitment_mail_schedule", source_ref: "mail-future", title: "十月笔试", event_date: "2030-10-09", event_type: "参加笔试" }),
+    scheduleFixture({ id: "done", source: "recruitment_mail_schedule", title: "已完成测评", status: "completed", event_type: "完成测评" }),
+    scheduleFixture({ id: "unknown", source: "recruitment_mail_schedule", title: "时间待核实测评", event_date: null, event_type: "完成测评" }),
+    scheduleFixture({ id: "ignored", source: "recruitment_mail_schedule", status: "ignored", event_type: "参加面试" }),
+    scheduleFixture({ id: "ordinary", source: "manual" }),
+  ];
+  hooks.renderMailTasks();
+  const node = document.getElementById("mail-task-list");
+  const rows = node.children.filter(child => child.className.includes("mail-task-entry"));
+  assert.equal(rows.length, 2);
+  assert.match(rows[0].textContent, /参加笔试/);
+  assert.match(rows[1].textContent, /时间待确认/);
+  assert.equal(rows[0].querySelector("a").dataset.mailOpenId, "mail-future");
+  assert.match(rows[0].textContent, /已完成忽略/);
+  assert.equal(document.getElementById("mail-pending-count").textContent, "2");
+  assert.equal(document.getElementById("mail-completed-count").textContent, "1");
+  assert.equal(document.getElementById("mail-ignored-count").textContent, "1");
+  hooks.state.mailBrowse.taskStatus = "ignored";
+  hooks.renderMailTasks();
+  assert.equal(node.children.length, 1);
+  assert.match(node.textContent, /恢复待办/);
+});
+
+test("mail checklist switches between ascending and descending time order while keeping undated tasks last", () => {
+  const { document, hooks } = loadApp(async () => jsonResponse({}));
+  hooks.state.allSchedules = [
+    scheduleFixture({ id: "early", source: "recruitment_mail_schedule", company_name: "较早笔试", event_date: "2030-10-01", event_type: "参加笔试" }),
+    scheduleFixture({ id: "late", source: "recruitment_mail_schedule", company_name: "较晚面试", event_date: "2030-11-01", event_type: "参加面试" }),
+    scheduleFixture({ id: "undated", source: "recruitment_mail_schedule", company_name: "待确认测评", event_date: null, event_type: "完成测评" }),
+  ];
+
+  hooks.renderMailTasks();
+  let rows = document.getElementById("mail-task-list").children.filter(child => child.className.includes("mail-task-entry"));
+  assert.match(rows[0].textContent, /较早笔试/);
+  assert.match(rows[1].textContent, /较晚面试/);
+  assert.match(rows[2].textContent, /待确认测评/);
+
+  hooks.state.mailBrowse.timeSort = "desc";
+  hooks.renderMailTasks();
+  rows = document.getElementById("mail-task-list").children.filter(child => child.className.includes("mail-task-entry"));
+  assert.match(rows[0].textContent, /较晚面试/);
+  assert.match(rows[1].textContent, /较早笔试/);
+  assert.match(rows[2].textContent, /待确认测评/);
+});
+
+test("mail inbox applies received-date filters and paginates without losing records", async () => {
+  const calls = [];
+  const { document, hooks } = loadApp(async (url) => {
+    calls.push(url);
+    const offset = new URL(url, "http://localhost").searchParams.get("offset");
+    return jsonResponse({ items: [mailFixture({ id: offset === "0" ? "first" : "second" })], total: 2, freshness: { status: "cached" } });
+  });
+  Object.assign(hooks.state.mailBrowse, { startDate: "2026-09-20", endDate: "2026-09-28", category: "assessment" });
+
+  await hooks.loadRecruitmentMails();
+  await hooks.loadRecruitmentMails({ showLoading: false, more: true });
+
+  assert.match(calls[0], /start_date=2026-09-20&end_date=2026-09-28&category=assessment/);
+  assert.match(calls[1], /offset=1/);
+  assert.equal(hooks.state.mails.length, 2);
+  assert.equal(document.getElementById("mail-load-more-button").hidden, true);
+});
+
+test("mail task update processes remaining batches automatically", async () => {
+  const calls = [];
+  let batches = 0;
+  const { document, hooks } = loadApp(async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url === "/api/local-ui/recruitment-mail/tasks/process") {
+      batches++;
+      return jsonResponse({ processed: batches === 1 ? 10 : 4, schedule_items_created: 2, remaining_count: batches === 1 ? 4 : 0, failed: 0 });
+    }
+    if (url === "/api/schedule") return jsonResponse([]);
+    return jsonResponse({ status: "synced" });
+  });
+  await hooks.processMailTasks();
+  assert.equal(calls[0].url, "/api/recruitment-mails/sync?limit=500");
+  assert.equal(batches, 2);
+  assert.equal(calls[1].options.headers["X-RecruitOps-Local-UI"], "1");
+  assert.match(document.getElementById("mail-process-status-detail").textContent, /新增 4 项/);
+  assert.equal(document.getElementById("mail-process-button").disabled, false);
+});
+
+test("mail task update stops after a failed batch and keeps unresolved work visible", async () => {
+  let batches = 0;
+  const { document, hooks } = loadApp(async (url) => {
+    if (url === "/api/local-ui/recruitment-mail/tasks/process") {
+      batches++;
+      return jsonResponse({ processed: 10, failed: 10, remaining_count: 30, unfinished_count: 40 });
+    }
+    if (url === "/api/schedule") return jsonResponse([]);
+    return jsonResponse({ status: "synced" });
+  });
+  await hooks.processMailTasks();
+  assert.equal(batches, 1);
+  assert.match(document.getElementById("mail-process-status-detail").textContent, /10 封未能确认任务/);
+  assert.match(document.getElementById("mail-process-status-detail").textContent, /30 封尚未整理/);
 });
 
 function scheduleFixture(overrides = {}) {
@@ -1091,8 +1280,10 @@ test("calendar shows dated events and only counts undated events", () => {
   const { document, hooks } = loadApp(async () => {
     throw new Error("calendar render should not fetch");
   });
+  const now = new Date();
+  const dated = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-14`;
   hooks.state.allSchedules = [
-    scheduleFixture({ id: "dated", title: "日历可见面试", event_date: "2026-09-14" }),
+    scheduleFixture({ id: "dated", title: "日历可见面试", event_date: dated }),
     scheduleFixture({ id: "undated", title: "不应重复列出的事项", event_date: null, event_time: null }),
   ];
   hooks.state.scheduleStatus = "all";
@@ -1187,6 +1378,22 @@ test("status updates use the local-ui event route and optimistic version", async
   assert.deepEqual(JSON.parse(calls[0].options.body), {
     status: "completed",
     expected_updated_at: "2026-09-08T08:00:00Z",
+  });
+});
+
+test("mail task completion uses the source-bound status route", async () => {
+  const calls = [];
+  const { hooks } = loadApp(async (url, options = {}) => {
+    calls.push({ url, options });
+    return jsonResponse(url === "/api/schedule" ? [] : { status: "updated" });
+  });
+  hooks.state.allSchedules = [scheduleFixture({ id: "mail-event", source: "recruitment_mail_schedule" })];
+
+  await hooks.updateScheduleStatus("mail-event", "completed");
+
+  assert.equal(calls[0].url, "/api/local-ui/mail-tasks/mail-event/status");
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    status: "completed", expected_updated_at: "2026-09-08T08:00:00Z",
   });
 });
 
@@ -1304,64 +1511,71 @@ test("active progress supports review and mail, never includes old finished card
   assert.equal(document.getElementById("assistant-more-task-progress").children.length, 0);
 });
 
-test("application board searches every column independently and loads more without hiding other stages", async () => {
+test("application list loads all stages in one request and filters by stage cards", async () => {
   const calls = [];
   const records = Array.from({ length: 86 }, (_, index) => ({ id: `a-${index}`, company_name: "示例公司",
     job_title: `岗位${index}`, stage: index < 82 ? "applied" : index < 85 ? "written" : "interview1" }));
   const { document, hooks } = loadApp(async url => {
     calls.push(url);
     const params = new URL(url, "http://localhost").searchParams;
-    const rows = records.filter(row => params.getAll("stages").includes(row.stage));
+    const stages = params.getAll("stages");
+    const rows = stages.length ? records.filter(row => stages.includes(row.stage)) : records;
     const offset = Number(params.get("offset"));
     return jsonResponse({ items: rows.slice(offset, offset + 50), total: rows.length, unfiltered_total: 888,
       stage_counts: { interview1: 1, applied: 82, written: 3 } });
   });
   document.getElementById("application-search").value = "  示例公司  ";
   await hooks.loadApplications();
-  assert.equal(calls.length, 5);
-  assert.ok(calls.every(url => new URL(url, "http://localhost").searchParams.get("query") === "示例公司"));
-  assert.ok(calls.every(url => new URL(url, "http://localhost").searchParams.get("offset") === "0"));
-  assert.equal(hooks.state.applications.length, 54);
-  assert.equal(hooks.state.applicationBrowse.columns.interview.items.length, 1);
-  assert.equal(hooks.state.applicationBrowse.columns.written.items.length, 3);
+  assert.equal(calls.length, 1);
+  const first = new URL(calls[0], "http://localhost").searchParams;
+  assert.equal(first.get("query"), "示例公司");
+  assert.equal(first.get("offset"), "0");
+  assert.deepEqual(first.getAll("stages"), []);
+  assert.equal(hooks.state.applications.length, 50);
   assert.equal(document.getElementById("nav-application-count").textContent, "888");
-  assert.match(document.getElementById("application-page-description").textContent, /匹配 86 条 · 已显示 54 条/);
-  await hooks.loadApplications({ moreColumn: "applied" });
-  assert.equal(calls.length, 6);
-  assert.equal(new URL(calls[5], "http://localhost").searchParams.get("offset"), "50");
-  assert.equal(hooks.state.applications.length, 86);
-  assert.equal(hooks.state.applicationBrowse.columns.interview.items.length, 1);
-  assert.equal(hooks.state.applicationBrowse.columns.written.items.length, 3);
+  assert.match(document.getElementById("application-page-description").textContent, /匹配 86 条 · 已显示 50 条/);
+  const writtenCard = document.querySelector(".application-summary-item--written");
+  assert.equal(writtenCard.getAttribute("aria-pressed"), "false");
+  writtenCard.click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(hooks.state.applicationBrowse.stageFilter, "written");
+  assert.equal(calls.length, 2);
+  assert.deepEqual(new URL(calls[1], "http://localhost").searchParams.getAll("stages"), ["assessment", "written"]);
+  assert.equal(hooks.state.applicationBrowse.items.length, 3);
+  assert.match(document.getElementById("application-page-description").textContent, /匹配 3 条 · 已显示 3 条/);
+  document.querySelector(".application-summary-item--written").click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(hooks.state.applicationBrowse.stageFilter, null);
 });
 
-test("application refresh resets each column offset and preserves search", async () => {
+test("application refresh resets offset and preserves search", async () => {
   const calls = [];
   const { document, hooks } = loadApp(async url => {
     calls.push(url); return jsonResponse({ items: [], total: 0, unfiltered_total: 70, stage_counts: {} });
   });
   document.getElementById("application-search").value = "测试岗";
-  hooks.state.applicationBrowse.columns.applied = { items: [{ id: "old" }], total: 120, offset: 100 };
+  hooks.state.applicationBrowse.items = [{ id: "old" }];
+  hooks.state.applicationBrowse.offset = 100;
+  hooks.state.applicationBrowse.total = 120;
   await hooks.loadApplications();
-  assert.equal(calls.length, 5);
-  assert.ok(calls.every(url => new URL(url, "http://localhost").searchParams.get("offset") === "0"));
-  assert.equal(hooks.state.applicationBrowse.columns.applied.offset, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(new URL(calls[0], "http://localhost").searchParams.get("offset"), "0");
+  assert.equal(hooks.state.applicationBrowse.offset, 0);
   assert.equal(hooks.state.applications.length, 0);
   assert.equal(document.getElementById("application-search").value, "测试岗");
 });
 
-test("failed load-more retains visible application columns and retry offset", async () => {
+test("failed load-more retains visible applications and retry offset", async () => {
   let failMore = false;
   const { document, hooks } = loadApp(async url => {
-    const params = new URL(url, "http://localhost").searchParams;
     if (failMore) throw new Error("synthetic load-more failure");
-    const applied = params.getAll("stages").includes("applied");
-    return jsonResponse({ items: applied ? [{ id: "keep-applied", stage: "applied", job_title: "保留岗位" }] : [],
-      total: applied ? 2 : 0, stage_counts: { applied: 2 }, unfiltered_total: 2 });
+    return jsonResponse({ items: [{ id: "keep-applied", stage: "applied", job_title: "保留岗位" }],
+      total: 2, stage_counts: { applied: 2 }, unfiltered_total: 2 });
   });
   await hooks.loadApplications();
   failMore = true;
-  assert.equal(await hooks.loadApplications({ moreColumn: "applied" }), false);
-  assert.equal(hooks.state.applicationBrowse.columns.applied.offset, 1);
+  assert.equal(await hooks.loadApplications({ more: true }), false);
+  assert.equal(hooks.state.applicationBrowse.offset, 1);
   assert.match(document.getElementById("application-kanban").textContent, /保留岗位/);
   assert.doesNotMatch(document.getElementById("application-kanban").textContent, /投递记录加载失败/);
 });

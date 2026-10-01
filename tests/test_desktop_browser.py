@@ -2,6 +2,7 @@
 
 import json
 import importlib.util
+import os
 import shutil
 import subprocess
 import sys
@@ -41,7 +42,10 @@ def node_call(expression, value=None):
 def browser():
     with sync_playwright() as playwright:
         # Playwright creates an ephemeral profile; never attach to existing Edge.
-        instance = playwright.chromium.launch(headless=True)
+        instance = playwright.chromium.launch(
+            headless=True,
+            executable_path=os.environ.get("RECRUITOPS_TEST_BROWSER_EXECUTABLE") or None,
+        )
         yield instance
         instance.close()
 

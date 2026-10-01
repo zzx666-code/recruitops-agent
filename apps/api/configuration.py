@@ -11,11 +11,11 @@ from collections.abc import Mapping
 import re
 from time import monotonic
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 
-from apps.api.local_ui import local_ui_request, _storage
+from apps.api.local_ui import local_ui_request
 from packages.automation.latest_report import report_path, write_json_atomic
 from packages.config import (
     DEFAULT_OFFERBIU_INDUSTRY_GROUPS,
@@ -28,9 +28,11 @@ from packages.config import (
 )
 from packages.candidate_profile.loader import CandidateProfileError, load_candidate_profile
 from packages.domain.models import ApplicationStage
-from packages.storage import ApplicationSnapshot
+from packages.storage import ApplicationSnapshot, Storage
 from packages.user_settings import CONFIG_FIELDS, SECRET_FIELDS, LEGACY_MODEL_FIELDS, settings_dir
-from packages.model_policy import official_base, official_model
+from packages.model_policy import (
+    PROVIDER_STYLES, completion_endpoint, validate_connection,
+)
 
 router = APIRouter(prefix="/api/local-ui/configuration", tags=["configuration"])
 
@@ -58,10 +60,6 @@ MATCHING_FIELDS = (
     "learning_targets",
     "unverified_skills",
 )
-
-
-def _valid_api_base(value: str) -> str:
-    return official_base(value)
 
 
 def _load_configuration_profile(settings: Settings):
@@ -176,6 +174,7 @@ def _build_structured_completion(
     model: str,
     endpoint: str,
     api_style: str,
+    provider: str = "deepseek",
     system_prompt: str,
     user_prompt: str,
     schema: dict,
@@ -195,7 +194,7 @@ def _build_structured_completion(
         "thinking_enabled": False,
         "max_attempts": 1,
     }
-    client = DeepSeekClient(**client_kwargs, api_style=api_style)
+    client = DeepSeekClient(**client_kwargs, api_style=api_style, provider=provider)
     return client.complete_structured(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
@@ -207,16 +206,11 @@ class ModelConnectionEdit(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     id: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=80)
-    provider: str = Field(pattern=r"^deepseek$")
-    api_style: str = Field(default="anthropic", pattern=r"^anthropic$")
+    provider: str = Field(pattern=r"^(deepseek|zhipu|zhipu_coding)$")
+    api_style: str = Field(default="anthropic", pattern=r"^(anthropic|openai)$")
     base_url: str = Field(min_length=1, max_length=2048)
     model: str = Field(min_length=1, max_length=200)
     api_key: str = Field(default="", max_length=4096)
-
-
-def _validate_model_provider(provider: str, api_style: str) -> None:
-    if provider != "deepseek" or api_style != "anthropic":
-        raise HTTPException(422, "目前仅支持 DeepSeek 官方接口")
 
 
 def _connection_path(settings: Settings):
@@ -227,7 +221,7 @@ def _fallback_connection(settings: Settings) -> dict:
     return {
         "id": "deepseek-primary",
         "name": settings.model_provider_name,
-        "provider": "deepseek",
+        "provider": settings.model_provider,
         "api_style": settings.model_api_style,
         "base_url": settings.model_api_base_url,
         "model": settings.model_name,
@@ -249,11 +243,14 @@ def _stored_connections(settings: Settings) -> tuple[list[dict], str]:
                         if not isinstance(row, Mapping) or not isinstance(row.get("id"), str):
                             continue
                         try:
-                            base = official_base(str(row.get("base_url") or ""))
-                            official_model(str(row.get("model") or ""))
+                            provider = str(row.get("provider") or "deepseek")
+                            style = str(row.get("api_style") or PROVIDER_STYLES.get(provider, ""))
+                            base = validate_connection(provider, style,
+                                str(row.get("base_url") or ""), str(row.get("model") or ""))
                         except ValueError:
                             continue
-                        clean_rows.append({**row, "base_url": base, "provider": "deepseek", "api_style": "anthropic"})
+                        clean_rows.append({**row, "base_url": base, "provider": provider,
+                                           "api_style": style})
                 if clean_rows and isinstance(active, str) and any(
                     row["id"] == active for row in clean_rows
                 ):
@@ -403,7 +400,7 @@ class ConfigEdit(BaseModel):
 
 
 @router.post("/save")
-def save_configuration(body: ConfigEdit):
+async def save_configuration(body: ConfigEdit, request: Request):
     settings = require_owner()
     preferences_path = settings_dir(settings) / "preferences.json"
     saved_preferences = json.loads(preferences_path.read_text(encoding="utf-8")) if preferences_path.is_file() else {}
@@ -411,6 +408,17 @@ def save_configuration(body: ConfigEdit):
     if set(body.settings) - CONFIG_FIELDS:
         raise HTTPException(422, "包含不支持的配置字段")
     overrides = dict(body.settings)
+    mail_fields = {"mail_imap_host", "mail_imap_port", "mail_imap_username",
+                   "mail_imap_password", "mail_imap_mailbox"}
+    mail_identity_changed = any(
+        str(overrides.get(field, getattr(settings, field))).strip().casefold()
+        != getattr(settings, field).strip().casefold()
+        for field in ("mail_imap_host", "mail_imap_username")
+    )
+    if (mail_identity_changed and settings.mail_imap_password
+            and not overrides.get("mail_imap_password")
+            and str(overrides.get("mail_imap_username", settings.mail_imap_username)).strip()):
+        raise HTTPException(422, "更换邮箱账号或服务器时，请重新填写该邮箱的授权码")
     saved_connections = None
     active_connection_id = body.active_model_connection_id
     profile_input = None
@@ -426,25 +434,25 @@ def save_configuration(body: ConfigEdit):
         if not body.model_connections or not active_connection_id:
             raise HTTPException(422, "请至少保留一个模型连接并选择主连接")
         existing_rows, _ = _stored_connections(settings)
-        existing_keys = {
-            str(row.get("id")): str(row.get("api_key") or "")
-            for row in existing_rows
-        }
+        existing_by_id = {str(row.get("id")): row for row in existing_rows}
         saved_connections = []
         seen: set[str] = set()
         for connection in body.model_connections:
             if not MODEL_ID_RE.fullmatch(connection.id) or connection.id in seen:
                 raise HTTPException(422, "模型连接标识无效或重复")
             seen.add(connection.id)
-            _validate_model_provider(connection.provider, connection.api_style)
             try:
-                base_url = _valid_api_base(connection.base_url)
-                official_model(connection.model)
+                base_url = validate_connection(connection.provider, connection.api_style,
+                                               connection.base_url, connection.model)
             except ValueError:
-                raise HTTPException(422, "请使用 DeepSeek 官方地址和支持的模型") from None
+                raise HTTPException(422, "请使用对应服务的官方地址和有效模型名称") from None
             row = connection.model_dump()
             row["base_url"] = base_url
-            row["api_key"] = connection.api_key or existing_keys.get(connection.id, "")
+            previous = existing_by_id.get(connection.id, {})
+            retained_key = (str(previous.get("api_key") or "")
+                            if previous.get("provider") == connection.provider
+                            and previous.get("base_url") == base_url else "")
+            row["api_key"] = connection.api_key or retained_key
             saved_connections.append(row)
         active = next(
             (row for row in saved_connections if row["id"] == active_connection_id),
@@ -455,6 +463,7 @@ def save_configuration(body: ConfigEdit):
         overrides.update({
             "codex_model_provider_id": re.sub(r"[^A-Za-z0-9_-]", "-", active["id"]),
             "model_provider_name": active["name"],
+            "model_provider": active["provider"],
             "model_api_style": active["api_style"],
             "model_api_base_url": active["base_url"],
             "model_name": active["model"],
@@ -469,6 +478,22 @@ def save_configuration(body: ConfigEdit):
             for key in ("llm_enabled", "codex_runtime_enabled"):
                 if key not in overrides:
                     overrides[key] = saved_preferences.get(key, True)
+    from packages.desktop_runtime.capabilities import saved_model_configured
+
+    prospective_capabilities = {**settings.model_dump(), **saved_preferences, **{
+        key: value
+        for key, value in overrides.items()
+        if key not in SECRET_FIELDS or value
+    }}
+    if ("automation_enabled" not in overrides
+            and "automation_enabled" not in saved_preferences
+            and saved_model_configured(prospective_capabilities)
+            and prospective_capabilities.get("llm_enabled") is True
+            and prospective_capabilities.get("codex_runtime_enabled") is True):
+        # The web configuration has no separate automation switch. Saving a
+        # working assistant is the local owner's opt-in to the scheduler; each
+        # recurring task still requires its own explicit creation request.
+        overrides["automation_enabled"] = True
     if settings.env == "desktop-isolated":
         from packages.desktop_runtime.capabilities import saved_mail_configured, saved_model_configured
 
@@ -476,12 +501,7 @@ def save_configuration(body: ConfigEdit):
         # prospective configuration with the same rule before deriving
         # automatic capabilities, otherwise an unchanged mailbox password
         # would be mistaken for a removed password.
-        prospective_overrides = {
-            key: value
-            for key, value in overrides.items()
-            if key not in SECRET_FIELDS or value
-        }
-        prospective = {**saved_preferences, **prospective_overrides}
+        prospective = prospective_capabilities
         model_configured = saved_model_configured(prospective)
         if model_configured and prospective.get("llm_enabled") is True:
             overrides["job_analysis_enabled"] = True
@@ -493,18 +513,28 @@ def save_configuration(body: ConfigEdit):
         # both disabled without affecting the rest of onboarding.
         overrides["mail_enabled"] = mail_configured
         overrides["mail_sync_on_startup"] = mail_configured
-    if "model_api_base_url" in overrides:
+    elif mail_fields.intersection(overrides):
+        from packages.desktop_runtime.capabilities import saved_mail_configured
+
+        # The web form has no separate mail enable switch. Saving a complete
+        # mailbox is the owner's opt-in; blank secret inputs retain the key.
+        prospective = {**settings.model_dump(), **{
+            key: value for key, value in overrides.items()
+            if key not in SECRET_FIELDS or value
+        }}
+        mail_configured = saved_mail_configured(prospective)
+        overrides["mail_enabled"] = mail_configured and overrides.get("mail_enabled") is not False
+        overrides["mail_sync_on_startup"] = overrides["mail_enabled"]
+    if any(key in overrides for key in ("model_provider", "model_api_style",
+                                       "model_api_base_url", "model_name")):
         try:
-            overrides["model_api_base_url"] = _valid_api_base(str(overrides["model_api_base_url"]))
+            overrides["model_api_base_url"] = validate_connection(
+                overrides.get("model_provider", settings.model_provider),
+                overrides.get("model_api_style", settings.model_api_style),
+                str(overrides.get("model_api_base_url", settings.model_api_base_url)),
+                str(overrides.get("model_name", settings.model_name)))
         except ValueError:
-            raise HTTPException(422, "目前仅支持 https://api.deepseek.com 官方地址") from None
-    if "model_name" in overrides:
-        try:
-            official_model(str(overrides["model_name"]))
-        except ValueError:
-            raise HTTPException(422, "请选择 DeepSeek 官方支持的模型") from None
-    if overrides.get("model_api_style", "anthropic") != "anthropic":
-        raise HTTPException(422, "目前仅支持 DeepSeek 官方接口")
+            raise HTTPException(422, "请使用对应服务的官方地址、接口类型和模型名称") from None
     for key in SECRET_FIELDS:
         if key == "llm_api_key" and saved_connections is not None:
             continue
@@ -525,6 +555,13 @@ def save_configuration(body: ConfigEdit):
             profile = CandidateProfile(**profile_input, source_ref="local", content_hash="0" * 64)
     except (ValueError, TypeError):
         raise HTTPException(422, "配置格式不正确，请检查字段类型") from None
+    codex_configuration_changed = any(
+        getattr(settings, field) != getattr(validated, field)
+        for field in (
+            "codex_model", "codex_model_provider_id", "model_api_style",
+            "model_api_base_url", "llm_api_key", "codex_runtime_enabled",
+        )
+    )
     if profile is not None:
         profile.matching.title_keywords = [word.strip() for word in profile.matching.title_keywords if word.strip()]
         if not profile.matching.title_keywords:
@@ -554,6 +591,15 @@ def save_configuration(body: ConfigEdit):
         from apps.api.local_ui import complete_desktop_onboarding
         complete_desktop_onboarding(validated, completion_profile)
     get_settings.cache_clear()
+    if codex_configuration_changed:
+        from apps.api.codex_bff import refresh_codex_bff_service
+
+        runtime_started = await refresh_codex_bff_service(
+            start_if_enabled=bool(getattr(request.app.state, "codex_runtime_live", False))
+        )
+        lifecycle = getattr(request.app.state, "automation_lifecycle", None)
+        if lifecycle is not None:
+            lifecycle.codex_runtime_started = runtime_started
     return {"saved": True, "restart_required": True,
             "message": "已保存。请查看各模块的配置与运行状态；需要重启的模块会单独提示。已有岗位评分不会自动重算。"}
 
@@ -561,8 +607,8 @@ def save_configuration(body: ConfigEdit):
 class ModelConnectionTest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     id: str = Field(min_length=1, max_length=64)
-    provider: str = Field(pattern=r"^deepseek$")
-    api_style: str = Field(default="anthropic", pattern=r"^anthropic$")
+    provider: str = Field(pattern=r"^(deepseek|zhipu|zhipu_coding)$")
+    api_style: str = Field(default="anthropic", pattern=r"^(anthropic|openai)$")
     base_url: str = Field(min_length=1, max_length=2048)
     model: str = Field(min_length=1, max_length=200)
     api_key: str = Field(default="", max_length=4096)
@@ -573,28 +619,29 @@ def test_model_connection(body: ModelConnectionTest):
     settings = require_owner()
     from packages.matching.client import DeepSeekClientError, _default_transport
 
-    _validate_model_provider(body.provider, body.api_style)
     try:
-        base = _valid_api_base(body.base_url)
-        official_model(body.model)
+        base = validate_connection(body.provider, body.api_style, body.base_url, body.model)
     except ValueError:
-        raise HTTPException(422, "请选择 DeepSeek 官方地址和支持的模型") from None
+        raise HTTPException(422, "请选择对应服务的官方地址和有效模型名称") from None
     stored, _ = _stored_connections(settings)
     stored_key = next(
-        (str(row.get("api_key") or "") for row in stored if row.get("id") == body.id),
+        (str(row.get("api_key") or "") for row in stored
+         if row.get("id") == body.id and row.get("provider") == body.provider
+         and row.get("base_url") == base),
         "",
     )
     api_key = body.api_key or stored_key
     if not api_key:
         raise HTTPException(422, "请填写 API 密钥")
     try:
-        endpoint = base + "/anthropic/v1/messages"
+        endpoint = completion_endpoint(body.provider, base)
         started = monotonic()
         response = _build_structured_completion(
             api_key=api_key,
             model=body.model,
             endpoint=endpoint,
             api_style=body.api_style,
+            provider=body.provider,
             system_prompt="Return the requested JSON only.",
             user_prompt='Return {"status":"ok"}.',
             schema={
@@ -604,22 +651,23 @@ def test_model_connection(body: ModelConnectionTest):
                 "additionalProperties": False,
             },
             timeout=20,
-            max_tokens=128,
+            max_tokens=1024,
         )
         parsed = json.loads(response.content)
         if parsed != {"status": "ok"}:
             raise ValueError("unexpected structured response")
-        # The workbench assistant uses a Responses-compatible Codex provider too.
-        assistant_response = _default_transport(
-            base + "/responses",
-            {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            {"model": body.model, "input": "Reply with OK only.", "max_output_tokens": 128,
-             "reasoning": {"effort": "none"}},
-            20,
-        )
-        if (not isinstance(assistant_response.get("id"), str)
-                or assistant_response.get("status") != "completed"):
-            raise ValueError("responses endpoint is incompatible")
+        if body.provider == "deepseek":
+            # DeepSeek's Responses route is used directly by Codex.
+            assistant_response = _default_transport(
+                base + "/responses",
+                {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                {"model": body.model, "input": "Reply with OK only.", "max_output_tokens": 128,
+                 "reasoning": {"effort": "none"}},
+                20,
+            )
+            if (not isinstance(assistant_response.get("id"), str)
+                    or assistant_response.get("status") != "completed"):
+                raise ValueError("responses endpoint is incompatible")
     except DeepSeekClientError as exc:
         labels = {
             "http_401": "API 密钥无效",
@@ -789,6 +837,7 @@ def parse_resume(body: ResumeText):
                     model=settings.llm_model,
                     endpoint=settings.llm_endpoint,
                     api_style=settings.model_api_style,
+                    provider=settings.model_provider,
                     system_prompt=system_prompt + correction,
                     user_prompt=body.text,
                     schema=ResumeDraft.model_json_schema(),
@@ -801,7 +850,7 @@ def parse_resume(body: ResumeText):
                 if exc.code not in {"response_truncated", "response_empty", "structured_response_invalid", "response_invalid"}:
                     raise
                 failure = "模型没有输出完整简历资料；已扩大输出额度重试，原配置未修改。"
-                correction = "\n上次返回不完整或结构无效。请严格按 schema 返回完整 result，未知学历为 null，无证据的技能不列出，空列表可用；不要编造。"
+                correction = "\n上次返回不完整或结构无效。请严格按 schema 返回完整 JSON，未知学历为 null，无证据的技能不列出，空列表可用；不要编造。"
             except ValidationError as exc:
                 failure = "模型未按简历字段结构返回完整内容；已重试，原配置未修改。"
                 # Field paths only: do not echo the invalid provider text or PII.
@@ -858,13 +907,16 @@ def parse_applications(body):
 
 @router.post("/applications/import")
 def import_applications(body: Upload):
-    require_owner()
+    settings = require_owner()
+    if not (settings.write_enabled or
+            (settings.env == "development" and settings.local_application_import_enabled)):
+        raise HTTPException(403, "本机投递记录导入尚未启用")
     try:
         rows = parse_applications(body)
     except (ValueError, TypeError, AttributeError):
         raise HTTPException(422, "导入格式无效；请使用模板字段、有效阶段和 HTTP/HTTPS 投递记录地址。未写入任何数据。") from None
     inserted = skipped = 0
-    with _storage().write_transaction() as session:
+    with Storage.from_url(settings.database_url).write_transaction() as session:
         for data in rows:
             identity = sha256((data.company_name + "\n" + data.job_title).encode()).hexdigest()
             if session.bind.dialect.name == "postgresql":

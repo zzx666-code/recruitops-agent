@@ -1,6 +1,7 @@
 """Offline identity-gate regressions through the real content-script listener."""
 
 from pathlib import Path
+import os
 
 import pytest
 from playwright.sync_api import sync_playwright
@@ -18,7 +19,10 @@ DJI_HTML = f"<main><h1>查询投递记录</h1><form>{DJI_TEXT}<input type='tel'>
 @pytest.fixture(scope="module")
 def browser():
     with sync_playwright() as playwright:
-        instance = playwright.chromium.launch(headless=True)
+        instance = playwright.chromium.launch(
+            headless=True,
+            executable_path=os.environ.get("RECRUITOPS_TEST_BROWSER_EXECUTABLE") or None,
+        )
         try:
             yield instance
         finally:

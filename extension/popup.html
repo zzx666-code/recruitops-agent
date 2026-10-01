@@ -2,10 +2,14 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f4f4f1">
     <title>RecruitOps Agent</title>
+    <link rel="stylesheet" href="styles.css">
   </head>
-  <body>
+  <body class="popup-page">
     <main>
+      <p class="eyebrow">RECRUITOPS / BRIDGE</p>
       <h1>RecruitOps Agent</h1>
       <button id="authorize" type="button">授权并读取当前标签页</button>
       <section aria-labelledby="application-capture-title">
@@ -16,7 +20,7 @@
         <textarea id="capture-note" maxlength="1000" rows="3"></textarea>
         <button id="capture-application" type="button">记录已投递</button>
       </section>
-      <button id="open-options" type="button">配置本机 API</button>
+      <button id="open-options" class="quiet-action" type="button">配置本机 API <span aria-hidden="true">↗</span></button>
       <p id="status" role="status">尚未读取页面。</p>
     </main>
     <script src="src/protocol.js"></script>

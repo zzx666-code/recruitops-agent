@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from packages.matching.client import (
     DeepSeekClientError, Transport, _default_transport, _validated_endpoint,
 )
+from packages.model_policy import validate_connection
 
 
 class VisionError(RuntimeError):
@@ -77,12 +78,19 @@ class VisionService:
     def __init__(
         self, *, api_key: str, model: str = "deepseek-flash",
         endpoint: str = "https://api.deepseek.com/chat/completions",
+        provider: str = "deepseek",
         timeout: float = 45.0, max_bytes: int = 6 * 1024 * 1024,
         transport: Transport | None = None,
     ) -> None:
         self.api_key = api_key
         self.model = model
-        self.endpoint = _validated_endpoint(endpoint)
+        base = endpoint.removesuffix("/chat/completions")
+        validate_connection(provider, "anthropic" if provider == "deepseek" else "openai",
+                            base, "deepseek-flash" if provider == "deepseek" else model)
+        if endpoint != base + "/chat/completions":
+            raise ValueError("Unsupported vision endpoint")
+        self.provider = provider
+        self.endpoint = _validated_endpoint(endpoint) if provider == "deepseek" else endpoint
         self.timeout = max(1, min(timeout, 90))
         self.max_bytes = max_bytes
         self.transport = transport or _default_transport
@@ -91,7 +99,7 @@ class VisionService:
         digest = image_digest(data_url, self.max_bytes)
         if not self.api_key.strip():
             raise VisionError("vision_not_configured")
-        if self.model not in {"deepseek-flash", "deepseek-v4-flash-vision-exp"}:
+        if self.provider == "deepseek" and self.model not in {"deepseek-flash", "deepseek-v4-flash-vision-exp"}:
             raise VisionError("vision_model_unsupported")
         payload = {
             "model": self.model,
@@ -101,9 +109,10 @@ class VisionService:
             ]}],
             "max_tokens": 1600,
             "stream": False,
-            "thinking": {"type": "disabled"},
             "response_format": {"type": "json_object"},
         }
+        if self.provider == "deepseek":
+            payload["thinking"] = {"type": "disabled"}
         try:
             raw = self.transport(self.endpoint, {
                 "Authorization": f"Bearer {self.api_key}",

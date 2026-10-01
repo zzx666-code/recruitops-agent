@@ -24,6 +24,8 @@ from .typed import EvidenceSource, ToolErrorCode, ToolInput, ToolModel, ToolResp
 
 class RecruitmentMailSearchInput(ToolInput):
     on_date: date | None = None
+    start_date: date | None = None
+    end_date: date | None = None
     category: RecruitmentMessageCategory | None = None
     categories: list[RecruitmentMessageCategory] | None = Field(
         default=None,
@@ -200,8 +202,8 @@ def _summary(record) -> RecruitmentMailSummary:
 def search_recruitment_mail(request: RecruitmentMailSearchInput, store: RecruitmentMailStore) -> RecruitmentMailSearchResponse:
     started = perf_counter()
     records = store.query(
-        start_date=request.on_date,
-        end_date=request.on_date,
+        start_date=request.on_date or request.start_date,
+        end_date=request.on_date or request.end_date,
         category=request.category,
         categories=request.categories,
         processing_status=request.processing_status,
@@ -209,8 +211,8 @@ def search_recruitment_mail(request: RecruitmentMailSearchInput, store: Recruitm
         offset=request.offset,
     )
     total = store.count(
-        start_date=request.on_date,
-        end_date=request.on_date,
+        start_date=request.on_date or request.start_date,
+        end_date=request.on_date or request.end_date,
         category=request.category,
         categories=request.categories,
         processing_status=request.processing_status,

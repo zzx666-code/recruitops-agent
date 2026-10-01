@@ -106,6 +106,43 @@ class UnloadedThreadService(FakeCodexService):
         return {"id": thread_id}
 
 
+class UnloadedTurnService(FakeCodexService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.loaded = False
+        self.resume_calls = 0
+        self.turn_start_calls = 0
+
+    async def thread_resume(self, thread_id: str):
+        self.resume_calls += 1
+        self.loaded = True
+        return {"id": thread_id}
+
+    async def turn_start(self, thread_id: str, text: str):
+        self.turn_start_calls += 1
+        if not self.loaded:
+            raise JsonRpcRemoteError(code=-32602, message=f"thread not found: {thread_id}")
+        return await super().turn_start(thread_id, text)
+
+
+class ExpiredTurnService(UnloadedTurnService):
+    async def thread_resume(self, thread_id: str):
+        self.resume_calls += 1
+        raise JsonRpcRemoteError(
+            code=-32602,
+            message=f"no rollout found for thread id {thread_id}",
+        )
+
+
+class ExpiredReadService(UnloadedThreadService):
+    async def thread_resume(self, thread_id: str):
+        self.resume_calls += 1
+        raise JsonRpcRemoteError(
+            code=-32602,
+            message=f"no rollout found for thread id {thread_id}",
+        )
+
+
 def test_codex_routes_are_explicitly_disabled(monkeypatch) -> None:
     monkeypatch.setattr(
         main,
@@ -194,6 +231,64 @@ def test_codex_thread_read_resumes_threads_unloaded_after_api_restart(monkeypatc
     assert response.json()["turns"][0]["id"] == "turn-1"
     assert service.resume_calls == 1
     assert service.read_calls == 2
+
+
+def test_codex_turn_start_resumes_thread_missing_after_api_restart(monkeypatch) -> None:
+    service = UnloadedTurnService()
+    monkeypatch.setattr(
+        main,
+        "get_settings",
+        lambda: SimpleNamespace(codex_runtime_enabled=True),
+    )
+    monkeypatch.setattr(main, "get_codex_bff_service", lambda: service)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/codex/threads/thread-1/turns",
+            json={"text": "hello"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == "turn-1"
+    assert service.resume_calls == 1
+    assert service.turn_start_calls == 2
+
+
+def test_codex_turn_start_marks_unrecoverable_saved_thread_as_expired(monkeypatch) -> None:
+    service = ExpiredTurnService()
+    monkeypatch.setattr(
+        main,
+        "get_settings",
+        lambda: SimpleNamespace(codex_runtime_enabled=True),
+    )
+    monkeypatch.setattr(main, "get_codex_bff_service", lambda: service)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/codex/threads/thread-1/turns",
+            json={"text": "hello"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"].startswith("assistant_thread_expired:")
+    assert service.resume_calls == 1
+
+
+def test_codex_thread_read_marks_unrecoverable_saved_thread_as_expired(monkeypatch) -> None:
+    service = ExpiredReadService()
+    monkeypatch.setattr(
+        main,
+        "get_settings",
+        lambda: SimpleNamespace(codex_runtime_enabled=True),
+    )
+    monkeypatch.setattr(main, "get_codex_bff_service", lambda: service)
+
+    with TestClient(main.app) as client:
+        response = client.get("/api/codex/threads/thread-1")
+
+    assert response.status_code == 409
+    assert response.json()["detail"].startswith("assistant_thread_expired:")
+    assert service.resume_calls == 1
 
 
 def test_codex_health_exposes_a_strict_auto_compaction_boundary(monkeypatch) -> None:

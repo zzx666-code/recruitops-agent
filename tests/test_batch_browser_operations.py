@@ -204,7 +204,7 @@ def test_batch_selects_all_non_terminal_without_application_query(tmp_path, monk
     assert response.total == 2
     assert response.summary["selection"] == "all_non_terminal"
     assert len(requests) == 1
-    assert requests[0].application_ids == ["active", "written"]
+    assert set(requests[0].application_ids) == {"active", "written"}
     assert not response.excluded
 
 

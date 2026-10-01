@@ -75,7 +75,7 @@
     companyPageSize: 30,
     applications: [],
     applicationsRequestId: 0,
-    applicationBrowse: { pageSize: 50, total: 0, columns: {}, query: "" },
+    applicationBrowse: { pageSize: 50, total: 0, items: [], offset: 0, query: "", stageFilter: null },
     applicationRequestController: null,
     jobRequestController: null,
     jobSummaryMode: null,
@@ -90,6 +90,7 @@
     scheduleEditingId: "",
     automations: [],
     mails: [],
+    mailBrowse: { total: 0, offset: 0, pageSize: 50, startDate: "", endDate: "", category: "", taskStatus: "pending", timeSort: "asc" },
     mailFreshness: { status: "unknown", synced_at: null, error_type: null },
     mailSync: { status: "idle", fetched: 0, inserted: 0, reused: 0, error: "" },
     conversations: [],
@@ -968,7 +969,7 @@
     });
     const thread = codexThreadPayload(response);
     const threadId = codexThreadIdOf(thread);
-    if (!threadId) throw new Error("Codex 创建会话后没有返回 thread id。");
+    if (!threadId) throw new Error("求职助理创建会话后没有返回会话 ID。");
     state.codexThreadId = threadId;
     state.codexThreadMetadata = thread;
     state.codexHistoryError = "";
@@ -1737,131 +1738,152 @@
     return { key: "record", label: "历史记录" };
   }
 
+  function applicationCard(application) {
+    const card = element("article", "application-card");
+    const heading = element("div", "application-card-heading");
+    const companyName = text(application.company_name, "公司待确认");
+    const avatarName = companyName.replace(/^加入/, "").replace(/^(深圳市|北京市|上海市|杭州市)/, "").replace(/(科技|集团|股份|有限|公司).*$/, "") || companyName;
+    const avatar = element("span", "application-avatar", avatarName.slice(0, 2));
+    const tone = Array.from(companyName).reduce((total, char) => total + char.charCodeAt(0), 0) % 5;
+    avatar.dataset.tone = String(tone);
+    const identity = element("div", "application-card-identity");
+    identity.append(element("strong", "", application.job_title), element("p", "application-company", companyName));
+    const menu = appendUiIcon(element("button", "application-card-menu"), "more");
+    menu.type = "button";
+    menu.title = "展开编辑";
+    menu.setAttribute("aria-label", `编辑 ${companyName} 的投递记录`);
+    menu.setAttribute("aria-expanded", "false");
+    const editor = applicationEditor(application);
+    menu.addEventListener("click", (event) => {
+      event.stopPropagation();
+      editor.hidden = !editor.hidden;
+      menu.setAttribute("aria-expanded", String(!editor.hidden));
+      menu.title = editor.hidden ? "展开编辑" : "收起编辑";
+    });
+    heading.append(avatar, identity, menu);
+
+    const historyItems = Array.isArray(application.stage_history) ? application.stage_history : [];
+    const latestHistory = historyItems[historyItems.length - 1] || {};
+    const fallbackResult = ["rejected", "withdrawn"].includes(application.stage) ? "已结束" : "进行中";
+    const status = element("div", "application-card-status");
+    status.append(
+      element("span", "application-result", latestHistory.result || fallbackResult),
+      element("span", "application-updated", `更新于 ${compactDate(application.updated_at)}`),
+    );
+
+    const actions = element("div", "application-card-actions");
+    const links = element("div", "application-card-links");
+    if (application.record_url) {
+      const record = element("a", "text-action", "查看投递进度 ›");
+      record.href = application.record_url;
+      record.target = "_blank";
+      record.rel = "noreferrer";
+      links.appendChild(record);
+    }
+    if (application.job_id) {
+      const job = element("button", "text-action", "岗位详情");
+      job.type = "button";
+      job.dataset.jobDetails = application.job_id;
+      links.appendChild(job);
+    }
+    card.append(heading, status);
+    if (application.note) card.appendChild(element("p", "application-note", application.note));
+    if (historyItems.length) {
+      const history = document.createElement("details");
+      history.className = "application-history";
+      const historySummary = element("summary", "", `阶段历史 (${historyItems.length})`);
+      history.appendChild(historySummary);
+      const historyList = document.createElement("ol");
+      historyItems.slice().reverse().forEach((entry) => {
+        const stage = applicationStageLabel(entry.stage || entry.to_stage || entry.status);
+        const parts = [stage];
+        if (entry.result) parts.push(entry.result);
+        parts.push(compactDate(entry.changed_at || entry.at || entry.created_at || entry.date));
+        const historyItem = element("li", "application-history-entry");
+        historyItem.append(
+          element("span", "application-history-copy", parts.join(" · ")),
+          element("span", `history-source history-source--${applicationHistorySource(entry).key}`, `来源：${applicationHistorySource(entry).label}`),
+        );
+        historyList.appendChild(historyItem);
+      });
+      history.appendChild(historyList);
+      links.appendChild(history);
+    }
+    actions.appendChild(links);
+    card.appendChild(actions);
+    card.appendChild(editor);
+    return card;
+  }
+
   function renderApplications(payload = {}) {
     state.applications = Array.isArray(payload.items) ? payload.items : [];
-    state.applicationBrowse.total = payload.total ?? state.applications.length;
+    const browse = state.applicationBrowse;
+    browse.total = payload.total ?? state.applications.length;
     const summary = $("application-summary");
     const kanban = $("application-kanban");
     clear(summary);
     clear(kanban);
     const filtered = Boolean($("application-search")?.value.trim());
-    setText("application-page-description", `${filtered ? "匹配" : "共"} ${state.applicationBrowse.total} 条 · 已显示 ${state.applications.length} 条`);
+    setText("application-page-description", `${filtered ? "匹配" : "共"} ${browse.total} 条 · 已显示 ${state.applications.length} 条`);
+    const stageCounts = payload.stage_counts || {};
+    const hasStageCounts = Boolean(Object.keys(stageCounts).length);
     APPLICATION_COLUMNS.forEach((column) => {
-      const applications = state.applications.filter((application) => column.stages.includes(application.stage));
-      const count = payload.stage_counts && Object.keys(payload.stage_counts).length
-        ? column.stages.reduce((sum, stage) => sum + (payload.stage_counts[stage] || 0), 0) : applications.length;
-      const summaryItem = element("div", `application-summary-item application-summary-item--${column.key}`);
+      const count = hasStageCounts
+        ? column.stages.reduce((sum, stage) => sum + (stageCounts[stage] || 0), 0)
+        : state.applications.filter((application) => column.stages.includes(application.stage)).length;
+      const isActive = column.key === browse.stageFilter;
+      const summaryItem = element("button", `application-summary-item application-summary-item--${column.key}${isActive ? " is-active" : ""}`);
+      summaryItem.type = "button";
+      summaryItem.setAttribute("aria-pressed", String(isActive));
+      summaryItem.title = isActive ? "点击返回全部记录" : `点击查看全部${column.label}记录`;
       const summaryIcon = appendUiIcon(element("span", "application-summary-icon"), column.key === "closed" ? "close" : column.key);
       const summaryCopy = element("div", "application-summary-copy");
-      summaryCopy.append(element("span", "", column.label), element("strong", "", count), element("small", "", "搜索范围内记录"));
+      summaryCopy.append(element("span", "", column.label), element("strong", "", count), element("small", "", isActive ? "点击返回全部记录" : "点击查看全部记录"));
       summaryItem.append(summaryIcon, summaryCopy);
+      summaryItem.addEventListener("click", () => {
+        browse.stageFilter = isActive ? null : column.key;
+        void loadApplications();
+      });
       summary.appendChild(summaryItem);
-
-      const section = element("section", `kanban-column kanban-column--${column.key}`);
-      const header = element("header", "kanban-column-header");
-      header.append(element("h3", "", column.label), element("span", "kanban-count", count));
-      section.appendChild(header);
-      const list = element("div", "kanban-list");
-      if (!applications.length) {
-        list.appendChild(element("div", "kanban-empty", "暂无记录"));
-      } else {
-        applications.forEach((application) => {
-          const card = element("article", "application-card");
-          const heading = element("div", "application-card-heading");
-          const companyName = text(application.company_name, "公司待确认");
-          const avatarName = companyName.replace(/^加入/, "").replace(/^(深圳市|北京市|上海市|杭州市)/, "").replace(/(科技|集团|股份|有限|公司).*$/, "") || companyName;
-          const avatar = element("span", "application-avatar", avatarName.slice(0, 2));
-          const tone = Array.from(companyName).reduce((total, char) => total + char.charCodeAt(0), 0) % 5;
-          avatar.dataset.tone = String(tone);
-          const identity = element("div", "application-card-identity");
-          identity.append(element("strong", "", application.job_title), element("p", "application-company", companyName));
-          const menu = appendUiIcon(element("button", "application-card-menu"), "more");
-          menu.type = "button";
-          menu.title = "展开编辑";
-          menu.setAttribute("aria-label", `编辑 ${companyName} 的投递记录`);
-          menu.setAttribute("aria-expanded", "false");
-          const editor = applicationEditor(application);
-          menu.addEventListener("click", (event) => {
-            event.stopPropagation();
-            editor.hidden = !editor.hidden;
-            menu.setAttribute("aria-expanded", String(!editor.hidden));
-            menu.title = editor.hidden ? "展开编辑" : "收起编辑";
-          });
-          heading.append(avatar, identity, menu);
-
-          const historyItems = Array.isArray(application.stage_history) ? application.stage_history : [];
-          const latestHistory = historyItems[historyItems.length - 1] || {};
-          const fallbackResult = ["rejected", "withdrawn"].includes(application.stage) ? "已结束" : "进行中";
-          const status = element("div", "application-card-status");
-          status.append(
-            element("span", "application-result", latestHistory.result || fallbackResult),
-            element("span", "application-updated", `更新于 ${compactDate(application.updated_at)}`),
-          );
-
-          const actions = element("div", "application-card-actions");
-          const links = element("div", "application-card-links");
-          if (application.record_url) {
-            const record = element("a", "text-action", "查看投递进度 ›");
-            record.href = application.record_url;
-            record.target = "_blank";
-            record.rel = "noreferrer";
-            links.appendChild(record);
-          }
-          if (application.job_id) {
-            const job = element("button", "text-action", "岗位详情");
-            job.type = "button";
-            job.dataset.jobDetails = application.job_id;
-            links.appendChild(job);
-          }
-          card.append(heading, status);
-          if (application.note) card.appendChild(element("p", "application-note", application.note));
-          if (historyItems.length) {
-            const history = document.createElement("details");
-            history.className = "application-history";
-            const historySummary = element("summary", "", `阶段历史 (${historyItems.length})`);
-            history.appendChild(historySummary);
-            const historyList = document.createElement("ol");
-            historyItems.slice().reverse().forEach((entry) => {
-              const stage = applicationStageLabel(entry.stage || entry.to_stage || entry.status);
-              const parts = [stage];
-              if (entry.result) parts.push(entry.result);
-              parts.push(compactDate(entry.changed_at || entry.at || entry.created_at || entry.date));
-              const historyItem = element("li", "application-history-entry");
-              historyItem.append(
-                element("span", "application-history-copy", parts.join(" · ")),
-                element("span", `history-source history-source--${applicationHistorySource(entry).key}`, `来源：${applicationHistorySource(entry).label}`),
-              );
-              historyList.appendChild(historyItem);
-            });
-            history.appendChild(historyList);
-            links.appendChild(history);
-          }
-          actions.appendChild(links);
-          card.appendChild(actions);
-          card.appendChild(editor);
-          list.appendChild(card);
-        });
-      }
-      section.appendChild(list);
-      const browse = state.applicationBrowse.columns[column.key];
-      if (browse && browse.offset < browse.total) {
-        const more = element("button", "button button--ghost", `加载更多（已显示 ${applications.length} / ${browse.total}）`);
-        more.type = "button";
-        more.dataset.applicationMore = column.key;
-        more.setAttribute("aria-label", `加载更多${column.label}记录`);
-        more.addEventListener("click", async () => {
-          if (more.disabled) return;
-          more.disabled = true;
-          more.textContent = "加载中…";
-          try { await loadApplications({ moreColumn: column.key }); }
-          finally { more.disabled = false; more.textContent = `加载更多（已显示 ${applications.length} / ${browse.total}）`; }
-        });
-        section.appendChild(more);
-      }
-      kanban.appendChild(section);
     });
+
+    const activeColumn = APPLICATION_COLUMNS.find(column => column.key === browse.stageFilter) || null;
+    const section = element("section", `kanban-column${activeColumn ? ` kanban-column--${activeColumn.key}` : ""}`);
+    const header = element("header", "kanban-column-header");
+    header.append(
+      element("h3", "", activeColumn ? `全部${activeColumn.label}记录` : "全部记录"),
+      element("span", "kanban-count", browse.total),
+    );
+    section.appendChild(header);
+    const list = element("div", "kanban-list");
+    if (!state.applications.length) {
+      list.appendChild(element("div", "kanban-empty", "暂无记录"));
+    } else {
+      state.applications.forEach((application) => list.appendChild(applicationCard(application)));
+    }
+    section.appendChild(list);
+    if (browse.offset < browse.total) {
+      const more = element("button", "button button--ghost", `加载更多（已显示 ${state.applications.length} / ${browse.total}）`);
+      more.type = "button";
+      more.dataset.applicationMore = activeColumn ? activeColumn.key : "all";
+      more.setAttribute("aria-label", "加载更多投递记录");
+      more.addEventListener("click", async () => {
+        if (more.disabled) return;
+        more.disabled = true;
+        more.textContent = "加载中…";
+        try { await loadApplications({ more: true }); }
+        finally { more.disabled = false; more.textContent = `加载更多（已显示 ${state.applications.length} / ${browse.total}）`; }
+      });
+      section.appendChild(more);
+    }
+    kanban.appendChild(section);
     setText("nav-application-count", payload.unfiltered_total ?? payload.total ?? state.applications.length);
-    if (!state.applications.length) empty(kanban, "没有匹配的投递记录", filtered ? "试试其他公司或岗位名称，或清除筛选条件。" : "可以手动添加投递，或在招聘官网记录投递。");
+    if (!state.applications.length) {
+      empty(kanban, "没有匹配的投递记录",
+        filtered ? "试试其他公司或岗位名称，或清除筛选条件。"
+          : activeColumn ? `${activeColumn.label}阶段暂无记录，点击上方卡片可返回全部记录。`
+            : "可以手动添加投递，或在招聘官网记录投递。");
+    }
     kanban.dataset.state = "ready";
   }
 
@@ -2023,50 +2045,37 @@
     return editor;
   }
 
-  function applicationBrowseQuery(column, offset = 0) {
+  function applicationBrowseQuery(offset = 0) {
     const params = new URLSearchParams({ limit: String(state.applicationBrowse.pageSize), offset: String(offset) });
     const query = $("application-search")?.value.trim();
     if (query) params.set("query", query);
-    column.stages.forEach(stage => params.append("stages", stage));
+    const column = APPLICATION_COLUMNS.find(item => item.key === state.applicationBrowse.stageFilter);
+    if (column) column.stages.forEach(stage => params.append("stages", stage));
     return params;
   }
 
-  async function loadApplications({ moreColumn = null } = {}) {
+  async function loadApplications({ more = false } = {}) {
     const query = $("application-search")?.value.trim() || "";
-    if (query !== state.applicationBrowse.query) moreColumn = null;
-    const columns = moreColumn ? APPLICATION_COLUMNS.filter(column => column.key === moreColumn) : APPLICATION_COLUMNS;
+    if (query !== state.applicationBrowse.query) more = false;
     const requestId = ++state.applicationsRequestId;
     state.applicationRequestController?.abort();
     const controller = new AbortController();
     state.applicationRequestController = controller;
     try {
-      const pages = await Promise.all(columns.map(async column => {
-        const offset = moreColumn ? state.applicationBrowse.columns[column.key]?.offset || 0 : 0;
-        const payload = await api(`/api/applications/page?${applicationBrowseQuery(column, offset)}`, { signal: controller.signal });
-        return { column, offset, payload };
-      }));
+      const offset = more ? state.applicationBrowse.offset : 0;
+      const payload = await api(`/api/applications/page?${applicationBrowseQuery(offset)}`, { signal: controller.signal });
       if (requestId !== state.applicationsRequestId) return false;
-      if (!moreColumn) state.applicationBrowse.columns = {};
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      const previous = more ? state.applicationBrowse.items : [];
+      state.applicationBrowse.items = [...new Map([...previous, ...items].map(item => [item.id, item])).values()];
+      state.applicationBrowse.offset = offset + items.length;
+      state.applicationBrowse.total = payload.total ?? state.applicationBrowse.items.length;
       state.applicationBrowse.query = query;
-      for (const { column, offset, payload } of pages) {
-        const previous = moreColumn ? state.applicationBrowse.columns[column.key]?.items || [] : [];
-        const items = Array.isArray(payload.items) ? payload.items : [];
-        state.applicationBrowse.columns[column.key] = {
-          items: [...new Map([...previous, ...items].map(item => [item.id, item])).values()],
-          offset: offset + items.length, total: payload.total || 0,
-        };
-      }
-      const payload = pages[0].payload;
-      const stageCounts = payload.stage_counts || {};
-      renderApplications({ ...payload, stage_counts: stageCounts,
-        total: Object.keys(stageCounts).length ? Object.values(stageCounts).reduce((sum, count) => sum + count, 0)
-          : Object.values(state.applicationBrowse.columns).reduce((sum, column) => sum + column.total, 0),
-        items: [...new Map(Object.values(state.applicationBrowse.columns).flatMap(column => column.items).map(item => [item.id, item])).values()],
-      });
+      renderApplications({ ...payload, items: state.applicationBrowse.items });
       return true;
     } catch (error) {
       if (requestId !== state.applicationsRequestId || error.name === "AbortError") return false;
-      if (!moreColumn) empty($("application-kanban"), "投递记录加载失败", error.message);
+      if (!more) empty($("application-kanban"), "投递记录加载失败", error.message);
       showToast(`投递记录加载失败：${error.message}`, "error");
       return false;
     }
@@ -2258,6 +2267,7 @@
       if (requestId !== state.scheduleRequestId) return false;
       state.allSchedules = Array.isArray(payload) ? payload : [];
       renderFullSchedule();
+      renderMailTasks();
       state.schedules = state.allSchedules.filter((event) => event.event_date === localDate() && normalizeScheduleStatus(event.status) === "pending");
       renderSchedule(state.schedules);
       setText("metric-schedule", state.schedules.length);
@@ -2276,7 +2286,10 @@
     const event = state.allSchedules.find((item) => text(item.id, "") === text(eventId, ""));
     if (!event || !SCHEDULE_STATUS_LABELS[status]) return;
     try {
-      await api(`${LOCAL_SCHEDULE_EVENTS_URL}/${encodeURIComponent(eventId)}`, {
+      const path = event.source === "recruitment_mail_schedule"
+        ? `/api/local-ui/mail-tasks/${encodeURIComponent(eventId)}/status`
+        : `${LOCAL_SCHEDULE_EVENTS_URL}/${encodeURIComponent(eventId)}`;
+      await api(path, {
         method: "PATCH",
         headers: authHeaders(`更新日程为${SCHEDULE_STATUS_LABELS[status]}`, { "Content-Type": "application/json" }),
         body: JSON.stringify({ status, expected_updated_at: event.updated_at }),
@@ -2838,8 +2851,8 @@
       setText("mail-freshness-title", "邮箱数据已同步");
       setText("mail-freshness-detail", freshness.synced_at ? `最近同步于 ${mailDateTime(freshness.synced_at)}` : "已完成最近一次邮箱同步。");
     } else if (status === "cached") {
-      setText("mail-freshness-title", "当前显示本地缓存");
-      setText("mail-freshness-detail", freshness.synced_at ? `最近一次同步于 ${mailDateTime(freshness.synced_at)}，尚未确认最新邮件。` : "尚未确认最新邮件，当前列表来自本地缓存。");
+      setText("mail-freshness-title", "当前显示本地邮件");
+      setText("mail-freshness-detail", freshness.synced_at ? `最近一次同步于 ${mailDateTime(freshness.synced_at)}；点击“同步邮件”可检查新邮件。` : "点击“同步邮件”可检查新邮件。");
     } else if (status === "failed") {
       setText("mail-freshness-title", "同步失败，当前显示缓存");
       setText("mail-freshness-detail", state.mails.length ? `${mailFreshnessError(freshness)}；邮件列表可能不是最新。` : `${mailFreshnessError(freshness)}；暂无可用的本地邮件缓存。`);
@@ -2864,6 +2877,54 @@
     setText("mail-sync-status-detail", detail);
   }
 
+  function setMailProcessFeedback(status, title, detail) {
+    const node = $("mail-process-status");
+    if (!node) return;
+    node.dataset.state = status;
+    node.hidden = status === "idle";
+    setText("mail-process-status-title", title);
+    setText("mail-process-status-detail", detail);
+  }
+
+  async function processMailTasks({ sync = true } = {}) {
+    const button = $("mail-process-button");
+    if (!button || button.disabled) return;
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    let processed = 0, created = 0, failed = 0;
+    setMailProcessFeedback("syncing", "正在更新任务", "已保存的任务可继续查看和操作。");
+    try {
+      if (sync) {
+        const refreshed = await api("/api/recruitment-mails/sync?limit=500", { method: "POST" });
+        if (!["synced", "success", "succeeded", "cached"].includes(refreshed?.status)) {
+          throw new Error("邮箱同步未完成，请检查邮箱配置后重试");
+        }
+      }
+      let remaining = 0, unresolved = 0;
+      do {
+        const result = await api("/api/local-ui/recruitment-mail/tasks/process", {
+          method: "POST", headers: authHeaders("更新招聘任务"),
+        });
+        if (result.status === "blocked") throw new Error("请先在配置中启用模型连接");
+        processed += Number(result.processed) || 0;
+        created += Number(result.schedule_items_created) || 0;
+        failed += Number(result.failed) || 0;
+        remaining = Number(result.remaining_count) || 0;
+        unresolved = Math.max(0, (Number(result.unfinished_count) || 0) - remaining);
+        await loadFullSchedule();
+        setMailProcessFeedback("syncing", "正在更新任务", `已检查 ${processed} 封 · 新增 ${created} 项 · 剩余 ${remaining} 封`);
+        if (!(Number(result.processed) > 0) || (result.failed && Number(result.failed) === Number(result.processed))) break;
+      } while (remaining > 0);
+      setMailProcessFeedback(failed || remaining || unresolved ? "failed" : "success", failed || remaining || unresolved ? "任务已更新，部分邮件需检查" : "任务已更新",
+        `${created ? `新增 ${created} 项` : "暂无新任务"}${unresolved || failed ? ` · ${unresolved || failed} 封未能确认任务` : ""}${remaining ? ` · ${remaining} 封尚未整理，可再次更新` : ""}`);
+    } catch (error) {
+      setMailProcessFeedback("failed", "任务更新失败", error.message);
+    } finally {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+    }
+  }
+
   function mailSyncCounts(sync = {}) {
     const value = (key) => {
       const count = Number(sync?.[key]);
@@ -2876,25 +2937,131 @@
     return payload?.freshness || payload?.data?.freshness || {};
   }
 
+  function mailTaskPriority(event) {
+    if (!event.event_date) return 3;
+    const due = scheduleDueGroup(event);
+    return due === "overdue" ? 0 : due === "soon" ? 1 : 2;
+  }
+
+  function compareMailTaskTime(left, right, direction = "asc") {
+    const leftPriority = mailTaskPriority(left);
+    const rightPriority = mailTaskPriority(right);
+    if (leftPriority === 3 || rightPriority === 3) {
+      if (leftPriority === rightPriority) return text(left.id, "").localeCompare(text(right.id, ""));
+      return leftPriority === 3 ? 1 : -1;
+    }
+    const factor = direction === "desc" ? -1 : 1;
+    if (leftPriority !== rightPriority) return (leftPriority - rightPriority) * factor;
+    return scheduleSortValue(left).localeCompare(scheduleSortValue(right)) * factor;
+  }
+
+  function mailTaskRow(event) {
+    const status = normalizeScheduleStatus(event.status);
+    const row = element("article", `mail-task-entry mail-task-entry--${status}`);
+    const checkbox = element("button", "mail-task-check", status === "completed" ? "✓" : "");
+    checkbox.type = "button";
+    checkbox.setAttribute("aria-label", `${status !== "pending" ? "恢复待办" : "完成"}：${event.company_name || event.title}`);
+    checkbox.setAttribute("aria-pressed", String(status === "completed"));
+    checkbox.dataset.scheduleAction = status === "pending" ? "complete" : "restore";
+    checkbox.dataset.scheduleId = text(event.id, "");
+    const identity = element("div", "mail-task-identity");
+    identity.append(element("strong", "", event.company_name || "公司待确认"),
+      element("span", "", event.job_title || "岗位未注明"));
+    const type = element("span", "mail-task-type", event.event_type || "待确认");
+    const time = element("div", "mail-task-due");
+    time.append(element("strong", "", event.event_date || "时间待确认"),
+      element("span", "", event.event_date ? scheduleCalendarTimeLabel(event) : "以原邮件为准"));
+    const source = element("a", "mail-task-source", "查看邮件 ↗");
+    source.href = `#mail/${encodeURIComponent(event.source_ref || "")}`;
+    source.dataset.mailOpenId = text(event.source_ref, "");
+    source.setAttribute("aria-label", `查看${event.company_name || "招聘"}的原邮件`);
+    const actions = element("div", "mail-task-operations");
+    const taskAction = (action, label) => {
+      const button = element("button", "", label);
+      button.type = "button";
+      button.dataset.scheduleAction = action;
+      button.dataset.scheduleId = text(event.id, "");
+      button.setAttribute("aria-label", `${label}：${event.company_name || event.title}`);
+      return button;
+    };
+    if (status === "pending") {
+      actions.append(taskAction("complete", "已完成"), taskAction("ignore", "忽略"));
+    } else {
+      actions.appendChild(taskAction("restore", "恢复待办"));
+    }
+    row.append(checkbox, identity, type, time, source, actions);
+    return row;
+  }
+
+  function renderMailTasks() {
+    const node = $("mail-task-list");
+    if (!node) return;
+    clear(node);
+    const mailEvents = state.allSchedules.filter((event) => event.source === "recruitment_mail_schedule"
+      && ["完成测评", "参加笔试", "参加面试", "assessment", "written_test", "interview", "测评", "笔试", "面试"].includes(event.event_type));
+    for (const status of ["pending", "completed", "ignored"]) {
+      const count = mailEvents.filter(event => normalizeScheduleStatus(event.status) === status).length;
+      setText(`mail-${status}-count`, count);
+      if (status === "pending") { setText("nav-mail-count", count); setText("mail-confirm-count", count); }
+      if (status === "completed") setText("mail-linked-count", count);
+    }
+    const selected = state.mailBrowse.taskStatus;
+    const timeSort = state.mailBrowse.timeSort === "desc" ? "desc" : "asc";
+    document.querySelectorAll("[data-mail-status]").forEach(button => {
+      button.setAttribute("aria-pressed", String(button.dataset.mailStatus === selected));
+    });
+    document.querySelectorAll("[data-mail-time-sort]").forEach(button => {
+      const ascending = timeSort === "asc";
+      button.textContent = button.classList.contains("mail-sort-control--compact")
+        ? `时间${ascending ? "升序 ↑" : "降序 ↓"}`
+        : `时间 ${ascending ? "↑" : "↓"}`;
+      button.setAttribute("aria-label", `当前按时间${ascending ? "升序" : "降序"}排列，点击切换为${ascending ? "降序" : "升序"}`);
+      button.setAttribute("title", `切换为时间${ascending ? "降序" : "升序"}`);
+    });
+    const shown = mailEvents.filter(event => selected === "all" || normalizeScheduleStatus(event.status) === selected)
+      .sort((left, right) => compareMailTaskTime(left, right, timeSort));
+    if (!shown.length) {
+      const titles = { pending: "当前没有待办", completed: "还没有已完成的任务", ignored: "还没有已忽略的任务" };
+      empty(node, titles[selected] || "暂无任务", selected === "pending"
+        ? "新邮件中的测评、笔试与面试会自动整理到这里。" : "处理过的任务会保留在这里，可以随时恢复。");
+      return;
+    }
+    const labels = ["已逾期 · 请核实是否仍可参加", "近期安排", "后续安排", "时间待确认"];
+    let lastPriority = -1;
+    shown.forEach(event => {
+      const priority = selected === "pending" ? mailTaskPriority(event) : -1;
+      if (priority !== lastPriority) {
+        node.appendChild(element("div", `mail-task-group mail-task-group--${priority}`, labels[priority]));
+        lastPriority = priority;
+      }
+      node.appendChild(mailTaskRow(event));
+    });
+    node.dataset.state = "ready";
+  }
+
   function renderMails(items, unavailable = false, freshness = null) {
     const node = $("mail-list"); clear(node);
     state.mails = Array.isArray(items) ? items : [];
+    if (!node) { renderMailTasks(); return; }
     renderMailFreshness(freshness || (unavailable ? { status: "disabled" } : {}), unavailable);
-    setText("nav-mail-count", state.mails.length);
-    setText("mail-total-count", state.mails.length);
-    setText("mail-confirm-count", state.mails.filter((item) => item.requires_confirmation).length);
-    setText("mail-linked-count", state.mails.filter((item) => item.application_id).length);
-    setText("mail-list-count", `${state.mails.length} 封`);
+    const total = Math.max(state.mails.length, state.mailBrowse.total || 0);
+    setText("nav-mail-count", total);
+    setText("mail-total-count", total);
+    setText("mail-list-count", `显示 ${state.mails.length} / ${total} 封`);
+    const moreButton = $("mail-load-more-button");
+    if (moreButton) moreButton.hidden = state.mails.length >= total;
+    renderMailTasks();
     if (unavailable && !state.mails.length) {
       if (state.mailFreshness.status === "failed") return errorState(node, "招聘邮件读取失败", "无法确认最新邮件，当前没有可用的本地缓存。");
       return empty(node, "招聘邮箱尚未连接", "请在本机配置只读邮箱连接并执行同步任务。");
     }
-    if (!state.mails.length) return empty(node, "暂无招聘邮件", "同步后会在这里显示分类和关联状态。");
+    if (!state.mails.length) return empty(node, "没有符合条件的邮件", "可调整收到日期或类型，或同步邮箱获取新邮件。");
     state.mails.forEach((mail) => {
       const item = document.createElement("article"); item.className = "mail-row";
       const main = document.createElement("div"); main.className = "mail-row-main";
       const title = document.createElement("strong"); title.className = "mail-subject"; title.textContent = text(mail.subject, "无主题");
       const meta = document.createElement("div"); meta.className = "mail-tags";
+      meta.appendChild(element("span", "mail-received-at", mailDateTime(mail.received_at, "日期未知")));
       meta.appendChild(element("span", "mail-tag mail-tag--category", MAIL_CATEGORY_LABELS[mail.category] || text(mail.category, "其他")));
       const processingStatus = normalizeMailStatus(mail.processing_status) || "pending";
       const processing = element("span", `mail-tag mail-tag--${mailProcessingTone(processingStatus)}`, `处理：${mail.processing_label || mailProcessingLabel(processingStatus)}`);
@@ -2905,27 +3072,39 @@
       associationTag.dataset.status = association.key;
       meta.appendChild(associationTag);
       const sender = document.createElement("span"); sender.className = "mail-sender"; sender.textContent = text(mail.sender, "发件人待确认");
-      main.append(title, meta, sender);
+      main.append(title, sender, meta);
       const target = [mail.company_name, mail.job_title].filter(Boolean).join(" · ");
       if (target) main.appendChild(element("span", "mail-target", `投递目标：${target}`));
       const actions = element("div", "mail-row-actions");
       const open = element("button", "button button--ghost", "查看邮件");
       open.type = "button"; open.dataset.mailOpenId = text(mail.id, "");
-      const review = element("button", "button button--secondary", "生成关联预览");
+      const review = element("button", "button button--ghost", "关联预览");
       review.type = "button"; review.dataset.mailReviewId = text(mail.id, "");
       const bindMail = element("button", "button button--ghost", mail.application_id ? "修改关联" : "关联投递");
       bindMail.type = "button"; bindMail.addEventListener("click", () => void openMailBinding(mail.id));
-      actions.append(open, bindMail, review);
+      const advanced = element("details", "mail-row-advanced");
+      advanced.appendChild(element("summary", "", "更多"));
+      advanced.append(bindMail, review);
+      actions.append(open, advanced);
       item.append(main, actions); node.appendChild(item);
     });
     node.dataset.state = "ready";
   }
 
-  async function loadRecruitmentMails({ showLoading = true } = {}) {
+  async function loadRecruitmentMails({ showLoading = true, more = false } = {}) {
     if (showLoading) loading($("mail-list"));
     try {
-      const response = await api("/api/recruitment-mails?limit=50&refresh=false");
-      renderMails(response.items || [], Boolean(response.unavailable), mailFreshnessFrom(response));
+      const browse = state.mailBrowse;
+      const offset = more ? state.mails.length : 0;
+      const parts = [`limit=${browse.pageSize}`, `offset=${offset}`, "refresh=false"];
+      if (browse.startDate) parts.push(`start_date=${encodeURIComponent(browse.startDate)}`);
+      if (browse.endDate) parts.push(`end_date=${encodeURIComponent(browse.endDate)}`);
+      if (browse.category) parts.push(`category=${encodeURIComponent(browse.category)}`);
+      const response = await api(`/api/recruitment-mails?${parts.join("&")}`);
+      browse.total = Number(response.total) || 0;
+      browse.offset = offset;
+      const items = more ? [...state.mails, ...(response.items || [])] : response.items || [];
+      renderMails(items, Boolean(response.unavailable), mailFreshnessFrom(response));
       return response;
     } catch (error) {
       const cachedItems = state.mails.slice();
@@ -2952,7 +3131,7 @@
       const sync = result?.sync || result?.data?.sync || {};
       const counts = mailSyncCounts(sync);
       const status = normalizeMailStatus(result?.status || result?.data?.status);
-      if (!["synced", "success", "succeeded"].includes(status)) {
+      if (!["synced", "success", "succeeded", "cached"].includes(status)) {
         const failure = mailFreshnessError(result) || text(result?.reason, "邮箱同步未完成");
         outcome = {
           status: "failed",
@@ -2960,6 +3139,14 @@
           detail: `${failure}；当前列表可能不是最新。`,
           extra: { ...counts, error: failure },
           toast: `邮箱同步失败：${failure}`,
+        };
+      } else if (status === "cached") {
+        outcome = {
+          status: "no-new",
+          title: "最近已同步",
+          detail: "另一项同步刚刚完成，邮件列表已更新。",
+          extra: counts,
+          toast: "最近已同步，邮件列表已更新",
         };
       } else if (counts.inserted > 0) {
         outcome = {
@@ -3003,6 +3190,8 @@
 
   async function reviewRecruitmentMail(recordId) {
     const node = $("mail-preview"); loading(node);
+    const advanced = $("mail-advanced-panel");
+    if (advanced) advanced.open = true;
     try {
       const result = await api(`/api/recruitment-mails/${encodeURIComponent(recordId)}/review`, {
         method: "POST",
@@ -3682,7 +3871,7 @@
   }
 
   function codexThreadTitle(thread) {
-    return text(thread?.preview || thread?.name || thread?.title, "新 Codex 会话");
+    return text(thread?.preview || thread?.name || thread?.title, "新求职助理会话");
   }
 
   function codexThreadUpdatedAt(thread) {
@@ -3704,7 +3893,7 @@
     if (!state.conversations.length) {
       if (state.codexThreadListLoading) loading(node);
       else if (state.codexThreadListError) errorState(node, "会话列表暂不可用", state.codexThreadListError);
-      else empty(node, "暂无历史会话", "还没有可恢复的 Codex 会话。");
+      else empty(node, "暂无历史会话", "还没有可恢复的求职助理会话。");
     } else {
       state.conversations.forEach((conversation) => {
         const item = element("div", "conversation-list-item");
@@ -3717,7 +3906,7 @@
         title.textContent = codexThreadTitle(conversation);
         const meta = document.createElement("span");
         const turnCount = conversation.turn_count ?? conversation.turnCount ?? (Array.isArray(conversation.turns) ? conversation.turns.length : null);
-        const countLabel = turnCount === null || turnCount === undefined ? "Codex 线程" : `${turnCount} 轮`;
+        const countLabel = turnCount === null || turnCount === undefined ? "求职助理会话" : `${turnCount} 轮`;
         meta.textContent = `${countLabel} · ${codexThreadUpdatedAt(conversation)}`;
         button.title = codexThreadTitle(conversation);
         button.append(title, meta);
@@ -3814,7 +4003,7 @@
 
   async function loadConversation(threadId) {
     if (state.codexEnabled !== true || state.codexReady !== true) {
-      setAssistantStatus("Codex 运行时不可用", "error");
+      setAssistantStatus("求职助理运行服务不可用", "error");
       return false;
     }
     const selectedThreadId = codexThreadIdOf(threadId);
@@ -3825,7 +4014,7 @@
     state.codexHistoryLoading = true;
     state.codexHistoryError = "";
     loading($("assistant-messages"));
-    setAssistantStatus("正在恢复 Codex 会话", "warn");
+    setAssistantStatus("正在恢复求职助理会话", "warn");
     renderConversationList();
     try {
       const detailResponse = await api(`/api/codex/threads/${encodeURIComponent(selectedThreadId)}`);
@@ -3859,12 +4048,21 @@
       renderConversation();
       renderTaskHistory();
       renderConversationList();
-      setAssistantStatus(state.messages.length ? "已恢复 Codex 会话" : "已恢复空会话", "ok");
+      setAssistantStatus(state.messages.length ? "已恢复求职助理会话" : "已恢复空会话", "ok");
       return true;
     } catch (error) {
       if (requestId !== state.codexHistoryRequestId) return false;
       if (/not materialized|includeTurns is unavailable/i.test(error.message || "")) {
         useEmptyCodexThread(selectedThreadId);
+        return true;
+      }
+      if (String(error.message || "").startsWith("assistant_thread_expired:")) {
+        state.codexThreadId = "";
+        writeStorage(STORAGE_KEYS.codexThread, "");
+        const replacementThreadId = await createCodexThread();
+        useEmptyCodexThread(replacementThreadId);
+        await refreshConversationList();
+        setAssistantStatus("旧会话已失效，已自动新建会话", "ok");
         return true;
       }
       state.codexHistoryError = error.message;
@@ -4012,7 +4210,7 @@
     }
   }
 
-  async function runCodexAssistantQuery(message, jobId = "", streamingMessageId = "") {
+  async function runCodexAssistantQuery(message, jobId = "", streamingMessageId = "", allowThreadRecovery = true) {
     if (state.codexEnabled === false) throw new Error(codexUnavailableMessage());
     if (state.codexEnabled !== true || state.codexReady !== true) throw new Error(codexUnavailableMessage());
     if (!state.codexThreadId) await createCodexThread();
@@ -4052,8 +4250,14 @@
       throw error;
     }
     if (!response.ok || !response.body || typeof response.body.getReader !== "function") {
-      let detail = `Codex 请求失败（${response.status}）`;
+      let detail = `求职助理请求失败（${response.status}）`;
       try { detail = (await response.json())?.detail || detail; } catch (_) { /* stream may not be JSON */ }
+      if (response.status === 409 && allowThreadRecovery && String(detail).startsWith("assistant_thread_expired:")) {
+        cleanupCodexRun();
+        state.codexThreadId = "";
+        await createCodexThread();
+        return runCodexAssistantQuery(message, jobId, streamingMessageId, false);
+      }
       setCodexEventStatus("error", detail, "error");
       cleanupCodexRun();
       throw new Error(detail);
@@ -4096,7 +4300,7 @@
     };
 
     const cancelledError = () => {
-      const error = new Error("Codex 执行已取消。");
+      const error = new Error("求职助理执行已取消。");
       error.name = "AbortError";
       return error;
     };
@@ -4220,13 +4424,13 @@
       const label = phase === "tool"
         ? toolName || progressValue || eventDetail(event, data)
         : kind === "turn"
-          ? "Codex turn 已建立"
+          ? "任务已建立"
           : kind === "turn_started"
-            ? "Codex turn 已开始"
+            ? "任务已开始"
             : kind === "turn_completed"
-              ? "Codex turn 已完成"
+              ? "任务已完成"
               : kind === "thread_started"
-                ? "Codex thread 已连接"
+                ? "求职助理已连接"
                 : kind === "item_started"
                   ? "执行项已开始"
                   : kind === "item_completed"
@@ -4296,14 +4500,14 @@
       if (!dataLines.length) return;
       try { handleEvent(eventName, JSON.parse(dataLines.join("\n"))); }
       catch (_) {
-        streamError = "Codex 返回了无法解析的流式事件。";
+        streamError = "求职助理返回了无法解析的流式事件。";
         setCodexEventStatus("error", streamError, "error");
       }
     };
 
     const ensureStreamResponse = async (streamResponse) => {
       if (streamResponse?.ok && streamResponse.body && typeof streamResponse.body.getReader === "function") return;
-      let detail = `Codex 流连接失败（${streamResponse?.status || 0}）`;
+      let detail = `模型响应连接失败（${streamResponse?.status || 0}）`;
       try { detail = (await streamResponse.json())?.detail || detail; } catch (_) { /* stream may not be JSON */ }
       throw new Error(detail);
     };
@@ -4337,15 +4541,15 @@
           await consumeResponse(streamResponse);
           if (turnCompleted) break;
           if (isCancelled()) throw cancelledError();
-          throw new Error("Codex 流连接已断开。");
+          throw new Error("模型响应连接已断开。");
         } catch (error) {
           if (error.name === "AbortError" || isCancelled()) throw cancelledError();
           if (streamError) throw new Error(streamError);
           if (reconnectAttempts >= CODEX_STREAM_MAX_RECONNECTS) throw error;
           reconnectAttempts += 1;
           reconnectReplayFence = true;
-          setAssistantStatus(`Codex 连接中断，正在重连（${reconnectAttempts}/${CODEX_STREAM_MAX_RECONNECTS}）`, "warn");
-          setText("assistant-live-label", "Codex 流连接中断");
+          setAssistantStatus(`模型连接中断，正在重连（${reconnectAttempts}/${CODEX_STREAM_MAX_RECONNECTS}）`, "warn");
+          setText("assistant-live-label", "模型响应连接中断");
           setText("assistant-live-detail", `正在重连（${reconnectAttempts}/${CODEX_STREAM_MAX_RECONNECTS}）`);
           setCodexEventStatus("progress", `连接中断，正在重连（${reconnectAttempts}/${CODEX_STREAM_MAX_RECONNECTS}）`, "active");
           const headers = {
@@ -4363,14 +4567,14 @@
       cleanupCodexRun();
     }
     if (streamError) throw new Error(streamError);
-    if (!turnCompleted) throw new Error("Codex 流已结束，但没有收到 turn_completed 事件。");
+    if (!turnCompleted) throw new Error("模型响应已结束，但任务没有完成。");
     const completedTask = {
       task_id: `codex-${state.codexTurnId || Date.now()}`,
       task_type: "conversation",
       user_request: message,
       status: "succeeded",
       steps: eventStages.length,
-      answer: streamedAnswer || "Codex 未返回文本。",
+      answer: streamedAnswer || "模型未返回文本。",
       error: null,
       thread_id: requestThreadId,
       turn_id: state.codexTurnId,
@@ -4425,7 +4629,7 @@
   async function resetConversation(newThread = false) {
     if (state.codexEnabled !== true || state.codexReady !== true) {
       showToast(codexUnavailableMessage(), "error");
-      setAssistantStatus("Codex 运行时不可用", "error");
+      setAssistantStatus("求职助理运行服务不可用", "error");
       return;
     }
     if (state.activeAssistantController) await stopAssistantExecution();
@@ -4433,7 +4637,7 @@
       try {
         await createCodexThread();
       } catch (error) {
-        showToast(`新 Codex 会话创建失败：${error.message}`, "error");
+        showToast(`新会话创建失败：${error.message}`, "error");
         return;
       }
     }
@@ -4541,7 +4745,7 @@
       const unavailable = codexUnavailableMessage();
       $("assistant-form-error").textContent = unavailable;
       $("assistant-form-error").hidden = false;
-      setAssistantStatus("Codex 运行时不可用", "error");
+      setAssistantStatus("求职助理运行服务不可用", "error");
       showToast(unavailable, "error");
       return null;
     }
@@ -4756,6 +4960,7 @@
     if (activeView && activeView !== view) viewScroll.set(activeView, window.scrollY);
     const changed = activeView !== view;
     activeView = view;
+    document.body.classList.toggle("assistant-page", view === "assistant");
     try { sessionStorage.setItem("recruitops.activeView", view); } catch (_) { /* Storage may be unavailable. */ }
     document.querySelectorAll("[data-view-panel]").forEach((panel) => { panel.hidden = panel.dataset.viewPanel !== view; panel.classList.toggle("is-visible", panel.dataset.viewPanel === view); });
     document.querySelectorAll("[data-view]").forEach((item) => {
@@ -4783,9 +4988,12 @@
     const systemNav = document.querySelector(".system-nav");
     if (["tasks", "approvals", "integrations"].includes(view) && systemNav) systemNav.open = true;
     $("sidebar")?.classList.remove("is-open"); $("mobile-menu-button")?.setAttribute("aria-expanded", "false");
-    if (changed) window.scrollTo(0, viewScroll.get(view) || 0);
+    if (changed) window.scrollTo(0, view === "assistant" ? 0 : (viewScroll.get(view) || 0));
     if (changed && view === "schedule") void loadFullSchedule();
     if (changed && view === "applications") void loadApplications();
+    if (changed && view === "mail") {
+      void loadFullSchedule();
+    }
     if (view === "assistant") void refreshDailyProgress();
   }
 
@@ -5030,9 +5238,57 @@
     });
     $("approvals-refresh-button").addEventListener("click", async () => { try { state.approvals = normalizeApprovals(await api("/api/approvals")); renderApprovals(); renderDashboardLists(); renderDashboardTodos(); renderConversation(); } catch (error) { showToast(error.message, "error"); } });
     $("traces-refresh-button").addEventListener("click", refreshTraces);
-    $("mail-refresh-button").addEventListener("click", syncRecruitmentMails);
+    $("mail-refresh-button")?.addEventListener("click", syncRecruitmentMails);
+    $("mail-process-button").addEventListener("click", () => void processMailTasks());
+    document.querySelectorAll("[data-mail-view]").forEach(button => button.addEventListener("click", () => {
+      const inbox = button.dataset.mailView === "inbox";
+      $("mail-tasks-panel").hidden = inbox;
+      $("mail-inbox-panel").hidden = !inbox;
+      document.querySelectorAll("[data-mail-view]").forEach(item =>
+        item.setAttribute("aria-pressed", String(item === button)));
+      if (inbox && !state.mails.length) void loadRecruitmentMails({ showLoading: false });
+    }));
+    document.querySelectorAll("[data-mail-status]").forEach(button => button.addEventListener("click", () => {
+      state.mailBrowse.taskStatus = button.dataset.mailStatus;
+      renderMailTasks();
+    }));
+    document.querySelectorAll("[data-mail-time-sort]").forEach(button => button.addEventListener("click", () => {
+      state.mailBrowse.timeSort = state.mailBrowse.timeSort === "desc" ? "asc" : "desc";
+      renderMailTasks();
+    }));
+    $("mail-task-status")?.addEventListener("change", (event) => {
+      state.mailBrowse.taskStatus = event.target.value;
+      renderMailTasks();
+    });
+    $("mail-filter-button")?.addEventListener("click", () => {
+      const startDate = $("mail-start-date").value;
+      const endDate = $("mail-end-date").value;
+      if (startDate && endDate && startDate > endDate) {
+        showToast("开始日期不能晚于结束日期", "error");
+        return;
+      }
+      Object.assign(state.mailBrowse, { startDate, endDate, category: $("mail-category-filter").value });
+      void loadRecruitmentMails();
+    });
+    $("mail-clear-filter-button")?.addEventListener("click", () => {
+      $("mail-start-date").value = "";
+      $("mail-end-date").value = "";
+      $("mail-category-filter").value = "";
+      Object.assign(state.mailBrowse, { startDate: "", endDate: "", category: "" });
+      void loadRecruitmentMails();
+    });
+    $("mail-load-more-button")?.addEventListener("click", () => void loadRecruitmentMails({ showLoading: false, more: true }));
     $("automations-refresh-button").addEventListener("click", loadAutomations);
     $("mobile-menu-button").addEventListener("click", () => { const sidebar = $("sidebar"); const open = sidebar.classList.toggle("is-open"); $("mobile-menu-button").setAttribute("aria-expanded", String(open)); });
+    $("sidebar-close-button").addEventListener("click", () => {
+      $("sidebar").classList.remove("is-open");
+      $("mobile-menu-button").setAttribute("aria-expanded", "false");
+      $("mobile-menu-button").focus();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || !$("sidebar").classList.contains("is-open")) return;
+      $("sidebar-close-button").click();
+    });
     $("new-conversation-button").addEventListener("click", () => void resetConversation(true));
     $("clear-conversation-button").addEventListener("click", () => {
       if (state.codexThreadId) void deleteConversation(state.codexThreadId);
@@ -5151,6 +5407,9 @@
     assistantAvailability,
     renderConversation,
     renderMails,
+    renderMailTasks,
+    loadRecruitmentMails,
+    processMailTasks,
     renderSchedule,
     renderFullSchedule,
     renderScheduleCalendar,
@@ -5185,6 +5444,7 @@
     renderDailyProgress,
     refreshDailyProgress,
     deleteConversation,
+    loadConversation,
     state,
   };
   if (globalThis.__RECRUITOPS_TEST_MODE__) {

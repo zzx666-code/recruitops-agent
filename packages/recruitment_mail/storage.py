@@ -417,7 +417,7 @@ def _date_or_datetime_filter(column: Any, value: date | datetime, *, lower: bool
     if isinstance(value, datetime):
         return column >= value if lower else column <= value
     expression = func.date(column)
-    return expression >= value.isoformat() if lower else expression <= value.isoformat()
+    return expression >= value if lower else expression <= value
 
 
 class RecruitmentMailStore:

@@ -48,6 +48,58 @@ def test_assessment_creates_undated_task_does_not_change_stage_or_repeat():
     assert len(items(store)) == 1 and items(store)[0].status == "completed"
 
 
+def test_local_task_mode_can_create_mail_task_without_global_writes_or_stage_change():
+    store, repo, record, settings, triage, proposal = setup_case("written_test")
+    settings.write_enabled = False
+    settings.local_mail_tasks_enabled = True
+    result = process_pending_mail(store, repo, settings, client=Client([triage, proposal]), tasks_only=True)
+    assert result["schedule_items_created"] == 1
+    assert items(store)[0].source_ref == record.id
+    with store.storage.session() as session:
+        assert session.get(ApplicationSnapshot, "4").stage == "applied"
+    assert store.get(record.id).processing_status == "task_processed"
+    assert process_pending_mail(store, repo, settings, client=Client([]))["reason"] == "write_disabled"
+
+
+def test_task_inbox_does_not_prevent_later_application_status_processing():
+    store, repo, record, settings, triage, proposal = setup_case("written_test")
+    settings.local_mail_tasks_enabled = True
+
+    task_result = process_pending_mail(store, repo, settings, client=Client([triage, proposal]), tasks_only=True)
+    assert task_result["scope_complete"] is True
+    assert store.get(record.id).processing_status == "task_processed"
+    assert len(items(store)) == 1
+
+    normal_result = process_pending_mail(store, repo, settings, client=Client([triage, proposal]))
+    assert normal_result["processed"] == 1
+    with store.storage.session() as session:
+        assert session.get(ApplicationSnapshot, "4").stage == "written"
+    assert len(items(store)) == 1
+
+
+def test_task_inbox_irrelevant_triage_does_not_hide_mail_from_normal_processing():
+    store, repo, record, settings, triage, proposal = setup_case("application_confirmation")
+    settings.local_mail_tasks_enabled = True
+    task_triage = [dict(triage[0], relevance="irrelevant")]
+
+    task_result = process_pending_mail(store, repo, settings, client=Client([task_triage]), tasks_only=True)
+    assert task_result["scope_complete"] is True
+    assert store.get(record.id).processing_status == "task_processed"
+
+    normal_result = process_pending_mail(store, repo, settings, client=Client([triage, proposal]))
+    assert normal_result["processed"] == 1
+    assert store.get(record.id).processing_status == "processed"
+
+
+@pytest.mark.parametrize("event", ["information", "action_required", "application_confirmation"])
+def test_task_inbox_excludes_non_test_or_interview_actions(event):
+    store, repo, record, settings, triage, proposal = setup_case(event)
+    settings.local_mail_tasks_enabled = True
+    result = process_pending_mail(store, repo, settings, client=Client([triage, proposal]), tasks_only=True)
+    assert result["schedule_items_created"] == 0
+    assert items(store) == []
+
+
 def test_company_invitation_creates_task_without_forcing_job_binding():
     store, repo, record, settings, triage, proposal = setup_case()
     proposal.update(job_title=None,candidate_application_id=None)

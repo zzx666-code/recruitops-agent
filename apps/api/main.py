@@ -127,12 +127,13 @@ def browser_vision_service() -> VisionService:
     settings = get_settings()
     return VisionService(
         api_key=settings.llm_api_key, model=settings.vision_model,
+        provider=settings.model_provider,
         endpoint=settings.vision_endpoint, timeout=settings.vision_timeout_seconds,
         max_bytes=settings.vision_max_image_bytes,
     )
 
 
-def _run_recruitment_mail_sync(*, limit: int = 100) -> dict[str, Any]:
+def _run_recruitment_mail_sync(*, limit: int = 100, force: bool = False) -> dict[str, Any]:
     """Run the same local mailbox sync path used by the API and scheduler."""
 
     settings = get_settings()
@@ -141,7 +142,7 @@ def _run_recruitment_mail_sync(*, limit: int = 100) -> dict[str, Any]:
     store = recruitment_mail_store()
     from packages.recruitment_mail.freshness import ensure_mail_fresh
 
-    return ensure_mail_fresh(settings, store, limit=limit)
+    return ensure_mail_fresh(settings, store, limit=limit, force=force)
 
 
 async def _run_startup_mail_sync(app_state: Any) -> None:
@@ -320,6 +321,7 @@ async def app_lifespan(_app: FastAPI):
         _app.state,
         codex_runtime_started=bool(getattr(settings, "codex_runtime_enabled", False)),
     )
+    _app.state.automation_lifecycle = automation_lifecycle
     automation_lifecycle_task = None
     startup_mail_task = None
     if getattr(settings, "mail_enabled", False) and getattr(settings, "mail_sync_on_startup", True):
@@ -335,9 +337,12 @@ async def app_lifespan(_app: FastAPI):
         _watch_automation_configuration(automation_lifecycle),
         name="automation-configuration-watch",
     )
+    _app.state.codex_runtime_live = True
     try:
         yield
     finally:
+        _app.state.codex_runtime_live = False
+        _app.state.automation_lifecycle = None
         if automation_lifecycle_task is not None:
             automation_lifecycle_task.cancel()
             await asyncio.gather(automation_lifecycle_task, return_exceptions=True)
@@ -345,7 +350,7 @@ async def app_lifespan(_app: FastAPI):
         if startup_mail_task is not None and not startup_mail_task.done():
             startup_mail_task.cancel()
             await asyncio.gather(startup_mail_task, return_exceptions=True)
-        if getattr(settings, "codex_runtime_enabled", False):
+        if get_codex_bff_service.cache_info().currsize:
             await get_codex_bff_service().stop()
         if bridge_enabled:
             await browser_bridge_server.stop()
@@ -362,6 +367,8 @@ app.include_router(local_ui_router)
 app.include_router(schedule_items_router)
 from apps.api.configuration import router as configuration_router
 app.include_router(configuration_router)
+from apps.api.model_adapter import router as model_adapter_router
+app.include_router(model_adapter_router)
 from apps.api.resume_filler import router as resume_filler_router
 app.include_router(resume_filler_router)
 app.include_router(company_sources_router)
@@ -407,7 +414,7 @@ async def local_ui_boundary(request, call_next):
     try:
         response = await call_next(request)
         if request.url.path in {
-            "/", "/index.html", "/app.js", "/company-sources.js", "/configuration.js", "/styles.css"
+            "/", "/index.html", "/app.js", "/company-sources.js", "/configuration.js", "/styles.css", "/swiss.css"
         }:
             # Revalidate HTML and its mutable assets together after deployment.
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
@@ -501,7 +508,36 @@ def _is_unmaterialized_thread_error(error: JsonRpcRemoteError) -> bool:
 
 def _is_unloaded_thread_error(error: JsonRpcRemoteError) -> bool:
     detail = f"{error.message} {error.data or ''}".casefold()
-    return "thread not loaded" in detail
+    return "thread not loaded" in detail or "thread not found" in detail
+
+
+async def _resume_codex_thread_or_expired(service: Any, thread_id: str) -> Any:
+    try:
+        return await service.thread_resume(thread_id)
+    except JsonRpcRemoteError as error:
+        detail = f"{error.message} {error.data or ''}".casefold()
+        if "no rollout found" not in detail and "thread not found" not in detail:
+            raise
+        raise HTTPException(
+            status_code=409,
+            detail="assistant_thread_expired: 保存的求职助理会话已失效",
+        ) from error
+
+
+async def _start_codex_turn_with_resume(
+    service: Any,
+    thread_id: str,
+    prompt: str,
+) -> Any:
+    """Restore a persisted App Server thread after a runtime restart."""
+
+    try:
+        return await service.turn_start(thread_id, prompt)
+    except JsonRpcRemoteError as error:
+        if not _is_unloaded_thread_error(error):
+            raise
+        await _resume_codex_thread_or_expired(service, thread_id)
+        return await service.turn_start(thread_id, prompt)
 
 
 @app.post("/api/codex/threads", tags=["codex"])
@@ -541,7 +577,7 @@ async def codex_thread_read(
         thread = await service.thread_read(thread_id, include_turns=include_turns)
     except JsonRpcRemoteError as error:
         if _is_unloaded_thread_error(error):
-            await service.thread_resume(thread_id)
+            await _resume_codex_thread_or_expired(service, thread_id)
             try:
                 thread = await service.thread_read(thread_id, include_turns=include_turns)
             except JsonRpcRemoteError as resumed_error:
@@ -562,7 +598,8 @@ async def codex_thread_read(
 async def codex_thread_resume(thread_id: str) -> dict[str, Any]:
     if not get_settings().codex_runtime_enabled:
         raise HTTPException(status_code=503, detail="Codex runtime is disabled")
-    thread = await get_codex_bff_service().thread_resume(thread_id)
+    service = get_codex_bff_service()
+    thread = await _resume_codex_thread_or_expired(service, thread_id)
     return thread.model_dump(mode="json") if isinstance(thread, BaseModel) else dict(thread)
 
 
@@ -578,7 +615,8 @@ async def codex_thread_delete(thread_id: str) -> dict[str, str]:
 async def codex_turn_start(thread_id: str, request: CodexTurnStartRequest) -> dict[str, Any]:
     if not get_settings().codex_runtime_enabled:
         raise HTTPException(status_code=503, detail="Codex runtime is disabled")
-    turn = await get_codex_bff_service().turn_start(thread_id, request.prompt())
+    service = get_codex_bff_service()
+    turn = await _start_codex_turn_with_resume(service, thread_id, request.prompt())
     return turn.model_dump(mode="json") if isinstance(turn, BaseModel) else dict(turn)
 
 
@@ -590,15 +628,20 @@ async def codex_turn_stream(
     if not get_settings().codex_runtime_enabled:
         raise HTTPException(status_code=503, detail="Codex runtime is disabled")
     service = get_codex_bff_service()
+    subscription = service.subscribe(thread_id)
+    try:
+        turn = await _start_codex_turn_with_resume(service, thread_id, request.prompt())
+    except BaseException:
+        subscription.close()
+        raise
+
+    turn_payload = (
+        turn.model_dump(mode="json") if isinstance(turn, BaseModel) else dict(turn)
+    )
+    turn_id = str(turn_payload.get("id") or "")
 
     async def stream():
-        subscription = service.subscribe(thread_id)
         try:
-            turn = await service.turn_start(thread_id, request.prompt())
-            turn_payload = (
-                turn.model_dump(mode="json") if isinstance(turn, BaseModel) else dict(turn)
-            )
-            turn_id = str(turn_payload.get("id") or "")
             yield f"event: turn\ndata: {json.dumps(turn_payload, ensure_ascii=False)}\n\n"
             async for event in subscription:
                 payload = event.model_dump(mode="json")
@@ -1154,6 +1197,8 @@ def _mail_data_or_error(result: Any, *, not_found_status: int = 503) -> Any:
 def list_recruitment_mails(
     refresh: bool = True,
     on_date: date | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
     category: RecruitmentMessageCategory | None = None,
     processing_status: RecruitmentMailProcessingStatus | None = None,
     limit: int = Query(default=50, ge=1, le=200),
@@ -1162,10 +1207,15 @@ def list_recruitment_mails(
 ) -> RecruitmentMailSearchData:
     from packages.recruitment_mail.freshness import ensure_mail_fresh
 
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=422, detail="开始日期不能晚于结束日期")
+
     freshness = ensure_mail_fresh(get_settings(), store) if refresh else {"status": "cached", "synced_at": None}
     result = search_recruitment_mail(
         RecruitmentMailSearchInput(
             on_date=on_date,
+            start_date=start_date,
+            end_date=end_date,
             category=category,
             processing_status=processing_status,
             limit=limit,
@@ -1186,10 +1236,26 @@ def sync_recruitment_mails(
     if not getattr(settings, "mail_enabled", False):
         raise HTTPException(status_code=503, detail="RECRUITOPS_MAIL_ENABLED is false")
     try:
-        result = _run_recruitment_mail_sync(limit=limit)
+        result = _run_recruitment_mail_sync(limit=limit, force=True)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"mail_sync_failed:{type(exc).__name__}") from exc
     return result
+
+
+@app.post("/api/local-ui/recruitment-mail/tasks/process", tags=["local-ui"])
+async def process_local_mail_tasks() -> dict[str, Any]:
+    """Explicit same-origin, task-only mail analysis in a bounded batch."""
+    settings = get_settings()
+    if not local_ui_request.get():
+        raise HTTPException(403, "Local same-origin UI request required")
+    if not settings.local_mail_tasks_enabled:
+        raise HTTPException(403, "招聘邮箱待办整理未启用")
+    if not settings.llm_enabled or not settings.llm_api_key:
+        raise HTTPException(503, "请先在配置中启用模型连接")
+    from packages.recruitment_mail.processing import process_pending_mail
+
+    return await asyncio.to_thread(process_pending_mail, recruitment_mail_store(), repository(),
+                                   settings, limit=10, tasks_only=True)
 
 
 @app.get(

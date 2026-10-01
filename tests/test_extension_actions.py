@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -26,7 +27,9 @@ def launch_fixture_browser(playwright):
     from playwright.sync_api import Error
 
     last_error = None
-    for options in ({}, {"channel": "msedge"}):
+    executable = os.environ.get("RECRUITOPS_TEST_BROWSER_EXECUTABLE")
+    options_list = ({"executable_path": executable},) if executable else ({}, {"channel": "msedge"})
+    for options in options_list:
         try:
             return playwright.chromium.launch(headless=True, **options)
         except Error as exc:

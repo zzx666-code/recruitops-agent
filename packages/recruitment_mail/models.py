@@ -37,6 +37,8 @@ class RecruitmentMailProcessingStatus(StrEnum):
     AMBIGUOUS_APPLICATION = "ambiguous_application"
     FAILED_TERMINAL = "failed_terminal"
     FAILED = "failed"
+    TASK_PROCESSED = "task_processed"
+    TASK_FAILED_TERMINAL = "task_failed_terminal"
 
     # Values used by earlier local consumers remain valid during migration.
     PROCESSED = "processed"
