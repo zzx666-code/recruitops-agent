@@ -1,269 +1,47 @@
-# RecruitOps 秋招工作台
+# Job · 秋招工作台
 
-> 一个面向校园招聘的 Windows 桌面软件：发现和筛选岗位、补全 JD、匹配评分、辅助投递、维护投递进度、处理招聘邮件，并把笔试、面试和待办统一到一处。
+面向 2027 届校招的本地求职工作台。把岗位发现、匹配分析、投递记录、招聘邮件、日程与求职助理放在同一个界面，减少在招聘网站、邮箱和表格之间来回切换。
 
-[![Latest release](https://img.shields.io/github/v/release/849879772/recruitops-agent?display_name=tag&sort=semver)](https://github.com/849879772/recruitops-agent/releases/latest)
-[![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows)](https://github.com/849879772/recruitops-agent/releases/latest)
-[![CI](https://github.com/849879772/recruitops-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/849879772/recruitops-agent/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+目前这个仓库以**源码运行**为主。项目还包含 Electron 桌面壳与内置招聘浏览器；本仓库尚未发布可直接下载的安装包，请不要使用其他仓库的 Release 作为本仓库版本。
 
-![RecruitOps 岗位工作台](docs/assets/jobs.png)
+> 下方界面图片由本项目的本地预览服务生成，使用的是模拟公司、岗位、邮件和会话，不含真实求职数据。
 
-## 主要功能
+![岗位发现界面，展示模拟校招岗位](docs/assets/readme-jobs.png)
 
-| 功能 | 能做什么 |
+## 能做什么
+
+| 模块 | 作用 |
 | --- | --- |
-| 校招岗位发现 | 从招聘聚合来源获取公司和校招入口，持续维护可抓取的官网来源 |
-| 岗位抓取与 JD 补全 | 抓取岗位列表，先按标题关键词筛选，再补全需要分析的岗位详情 |
-| 简历解析与匹配评分 | 从简历生成技能、项目摘要和岗位关键词，按个人背景给岗位评分并解释优势与不足 |
-| 内置招聘浏览器 | 在软件内打开招聘官网、保留登录状态、扫描表单并进行简历闪填 |
-| 投递记录 | 手动登记或从内置浏览器保存投递，维护已投递、笔试、面试、Offer 和已挂阶段 |
-| 官网进度复核 | 只复核未挂岗位，读取官方投递记录页并保留阶段证据，不用低优先级信息覆盖已确认进度 |
-| 招聘邮箱 | 通过只读 IMAP 同步招聘邮件，识别投递、测评、笔试、面试和拒信 |
-| 日程与待办 | 将有明确时间的招聘事项加入日程，将时间未定的事项保留为待办 |
-| 求职助理 | 用自然语言查询岗位、处理邮件、复核投递进度、运行抓取和管理定时任务 |
-| 自动化任务 | 为抓取、评分、邮箱处理和投递复核设置多个每日执行时间，查看执行详情和失败原因 |
-
-## 下载与启动
-
-### 系统要求
-
-- Windows 10 或 Windows 11，64 位
-- 建议至少 8 GB 内存
-- 建议预留 3 GB 可用磁盘空间
-- 能访问模型 API、招聘网站和邮箱 IMAP 服务的网络
-
-### 1. 下载桌面版
-
-当前可用版本为 RecruitOps v0.1.6，请下载 `RecruitOps-v0.1.6.zip`：
-
-- [GitHub Releases](https://github.com/849879772/recruitops-agent/releases/tag/v0.1.6)
-- [Gitee v0.1.6 更新说明](https://gitee.com/zs-k/recruitops-agent/blob/main/docs/RELEASE_v0.1.6.md)（完整压缩包请从 GitHub 或 123 云盘下载）
-- [123 云盘](https://1835739780.share.123pan.cn/123pan/QbN4Td-Aa02d)（含压缩包和 SHA-256 校验文件，无提取码）
-
-安装包大小约 704 MB。下载完成后可按需核对 SHA-256：
-
-```text
-6518E892E0C6D3E8847A34A773EB8262BCE39A0009F58DFE5F6AFE4C16BBCCF2
-```
-
-如果旧版已经爬取到岗位，或已有投递记录、招聘邮件，请先阅读[已有数据的桌面版升级步骤](docs/UPGRADE_EXISTING_DATA.md)。不要直接把旧版 `.data` 复制到不同安装路径。
-
-v0.1.6 改进了来源刷新容错、长任务成果保存、抓取效率和任务汇报。当前开发版的模型连接还支持智谱开放平台与智谱 Coding Plan；v0.1.6 的发布范围见 [更新说明](docs/RELEASE_v0.1.6.md)。
-
-### 2. 完整解压
-
-将压缩包完整解压到可写的短路径，例如：
-
-```text
-D:\RecruitOps
-```
-
-不要直接在压缩包预览窗口中运行，也不要只复制其中的 EXE。数据库、Python、Node.js、Chromium 和 PostgreSQL 都是软件的内部组件，必须和主程序保持原有目录结构。
-
-### 3. 启动唯一入口
-
-双击：
-
-```text
-RecruitOps-Desktop-Preview.exe
-```
-
-普通用户只需要运行这一个文件，不需要启动 CMD 脚本，也不需要单独启动目录里的其他程序。首次启动会初始化本地数据库和运行组件，时间可能比之后启动稍长。
-
-> 桌面版不要求预先安装 Docker、Python、Node.js、PostgreSQL 或浏览器插件。
-
-## 首次配置
-
-启动后进入左侧 **配置** 页面，按下面顺序完成设置。
-
-### 1. 配置模型连接
-
-1. 点击 **添加连接**，或编辑已有的主连接。
-2. 选择 `DeepSeek`、`智谱开放平台` 或 `智谱 Coding Plan`，并填写对应服务的 API Key。服务地址限定为界面列出的官方地址。
-3. 填写模型名称。DeepSeek 可选 `deepseek-flash` 或 `deepseek-v4-pro`；智谱可填写账户支持的模型，例如 `glm-4.5-air`、`glm-4-flash`。
-4. 点击 **测试连接**。测试会检查鉴权、模型名称、结构化输出和求职助理接口。
-5. 测试通过后点击 **保存模型连接**。
-
-可以保存多个连接，但同一时间只有一个主连接。简历解析、岗位评分、邮件理解和求职助理都使用当前主连接。
-
-旧版不受支持的第三方连接会停用。切换服务时需要填写新服务的密钥；系统不会把原服务的密钥发送给新服务。DeepSeek 的结构化解析使用 Responses JSON Schema；智谱使用 Chat Completions JSON 模式。两个分支都保留本地字段校验。
-
-### 2. 上传并分析简历
-
-1. 上传文字版 PDF、TXT 或 Markdown 简历，文件最大 10 MB。
-2. 点击 **分析简历**。
-3. 系统会提取学历、技能、项目依据和岗位筛选关键词。
-4. 检查模型生成的关键词，根据自己的求职目标增删后再保存。
-
-岗位筛选关键词不能为空。它们用于第一轮标题筛选，决定哪些岗位值得继续抓取 JD 和评分。扫描版 PDF 如果没有文字层，请先转换为可复制文字的 PDF。
-
-### 3. 选择岗位范围
-
-- 招聘类型固定为校招正式岗位。
-- 社招和实习默认排除，不需要额外配置。
-- 在 **OfferBiu 行业大类** 中选择希望关注的行业方向。
-- 行业方向控制公司来源范围，岗位关键词控制具体公司内保留哪些岗位。
-
-### 4. 配置招聘邮箱
-
-1. 在邮箱网页设置中开启 IMAP。
-2. 创建授权码或应用专用密码，不要填写网页登录密码。
-3. 在 RecruitOps 中选择邮箱服务商，或填写自定义 IMAP 地址和 SSL 端口。
-4. 填写完整邮箱地址、授权码和邮件文件夹，通常为 `INBOX`。
-5. 点击 **测试邮箱连接**，通过后保存。
-
-网易 163 可直接选择预设；其他支持账号密码或应用密码登录 IMAP 的邮箱可使用自定义配置。仅支持 OAuth2 且不允许 IMAP 应用密码的 Gmail、Outlook 账号，当前版本暂不支持。
-
-### 5. 保存配置
-
-点击页面底部的 **保存并完成首次配置**。模型连接、简历关键词和行业范围准备完成后，求职助理、抓取后评分和本地定时任务会按配置自动启用，不需要再寻找额外开关。部分运行配置变更会提示重启桌面软件后生效。
-
-![个人配置页面](docs/assets/configuration.png)
-
-## 从零开始使用
-
-### 第一步：抓取并评分岗位
-
-进入 **求职助理**，发送类似下面的指令：
-
-```text
-完成一次全量岗位抓取并评分
-```
-
-也可以让助理创建每日定时任务。一次全量流程依次执行：
-
-1. 从 OfferBiu 等来源同步公司和校园招聘入口。
-2. 排除公众号、问卷、登录页、个人中心等不可直接抓取的入口。
-3. 抓取各公司当前岗位列表并保存抓取状态。
-4. 按岗位标题关键词筛出相关岗位。
-5. 对 JD 缺失或不完整的候选岗位抓取详情。
-6. 对公司和岗位进行去重、更新和失效标记。
-7. 使用简历事实完成匹配评分和优势、劣势分析。
-8. 保存检查点和最终统计；长任务中断后可从检查点恢复。
-
-任务进度中的“需要补全 JD”表示当前候选集中 JD 不完整的岗位数量，不等于本轮新抓取到的关键词命中岗位数。
-
-### 第二步：查看和筛选岗位
-
-进入 **27 届校招**：
-
-- 按公司、岗位类型、招聘平台、评分状态和匹配分筛选。
-- 高匹配岗位优先展示。
-- 打开岗位详情可查看保存的 JD、匹配摘要、个人优势和待补足项。
-- 点击招聘页按钮可在内置浏览器中打开岗位。
-
-### 第三步：在内置浏览器投递
-
-1. 打开目标公司的招聘页。
-2. 在页面中自行完成登录、验证码或滑块验证。
-3. 点击桌面工具栏的 **简历闪填**。
-4. 扫描当前页面后，软件会尝试填写能够可靠识别的文本框、单选、多选、下拉框、重复经历和附件字段。
-5. 检查内容后由你手动提交，软件不会代替用户完成最终提交。
-6. 投递完成后，在 **投递记录** 页签填写公司、岗位、投递进度链接等信息并保存。
-
-内置浏览器会为不同站点保存独立登录状态。验证码、密码和最终提交始终由用户处理。
-
-### 第四步：维护投递进度
-
-进入 **投递记录** 可以：
-
-- 手动添加、编辑或删除记录。
-- 打开保存的官方投递进度页。
-- 查看阶段历史和证据说明。
-- 让助理批量复核所有非终态岗位。
-
-状态更新采用只升不降的优先级：已由邮件、人工或可靠官网证据确认的笔试、面试等阶段，不会因为官网只显示“已投递”“筛选中”或没有状态文本而被降级。
-
-![投递记录](docs/assets/applications.png)
-
-### 第五步：处理邮件和日程
-
-进入 **招聘邮箱** 直接查看按时间优先级排序的任务清单，展示公司、岗位、类型、时间和原邮件链接。页面会同步并自动分批整理新邮件，也可点击 **更新任务** 手动刷新。仅创建测评、笔试和面试任务；宣讲会、广告和普通通知不创建任务或日程。点击 **已完成** 或 **忽略** 后，任务移入对应页签，可以随时恢复。已处理邮件及任务状态会持久保存。
-
-邮件中的测评、笔试和面试如果包含明确日期，会生成日程；只有截止时间但没有具体开始时间的事项会以截止提醒保存；时间不明确的事项进入待办。
-
-| 招聘邮箱 | 日程安排 |
-| --- | --- |
-| ![招聘邮箱](docs/assets/mail.png) | ![日程安排](docs/assets/schedule.png) |
-
-### 第六步：查看公司来源和任务状态
-
-进入 **公司** 可以查看每个招聘来源的入口地址、抓取状态、岗位数量、JD 未完成数量和最近尝试时间。`抓取完整`、`抓取不完整` 与 `无法抓取` 会分别保留，便于后续重试和排查。
-
-![公司来源](docs/assets/companies.png)
-
-进入 **定时任务** 可以查看：
-
-- 每天的多个执行时间
-- 是否启用、下次运行时间和最近运行时间
-- 最近一次执行状态、耗时和结构化结果
-- 失败原因以及 **让助理解释** 入口
-
-定时任务依赖本地服务运行；需要在计划时间保持 RecruitOps 桌面软件开启。错过的时间点不会假装执行成功。
-
-![定时任务与最近一次抓取统计](docs/assets/automations.png)
-
-## 数据保存与升级
-
-运行数据默认保存在软件目录旁的：
-
-```text
-.data\
-```
-
-其中包含本地数据库、配置、任务检查点和招聘网站登录状态。建议定期备份整个 `.data` 目录。
-
-若旧版已经爬取岗位，或已有投递记录、邮件等数据，必须先正常退出软件并完整备份 `.data`。新版本先解压到临时目录，随后让新程序回到旧版的**相同绝对路径**，再把整个旧 `.data` 同盘移回；使用原 Windows 用户启动。不要在软件运行时复制数据库，也不要直接覆盖正在使用的旧目录。逐步操作及回退方法见[已有数据的桌面版升级步骤](docs/UPGRADE_EXISTING_DATA.md)。
-
-## 常见问题
-
-### 到底应该启动 EXE 还是 CMD？
-
-只启动 `RecruitOps-Desktop-Preview.exe`。CMD、内部 Python、Node.js 和 PostgreSQL 程序都不是用户入口。
-
-### 桌面版需要 Docker 吗？
-
-不需要。Releases 中的压缩包已经包含完整运行环境。Docker 只面向阅读源码、参与开发、运行 CI 或部署服务端环境的开发者。
-
-### 首次打开为什么没有岗位？
-
-新安装默认是空数据。完成模型、简历关键词和行业范围配置后，运行一次全量抓取，岗位和公司数据才会逐步入库。
-
-### 出现 `missing_resource`、`packaged_isolation_root_required` 或 `init_db_failed` 怎么办？
-
-1. 确认下载的是完整 Release 压缩包。
-2. 重新完整解压到 `D:\RecruitOps` 这类短路径。
-3. 不要只移动 EXE，不要从压缩包内运行。
-4. 确认当前目录可写，并暂时避开网盘同步目录、系统保护目录和过长路径。
-5. 如果旧目录曾启动失败，先备份 `.data`，再使用全新目录测试。
-
-### 求职助理不可用怎么办？
-
-回到 **配置** 页面测试主模型连接。检查 API Key、服务地址、模型名称和账户额度；保存后如果页面提示需要重启，请退出并重新打开软件。
-
-### 邮箱连接失败怎么办？
-
-确认邮箱已开启 IMAP，并使用授权码或应用专用密码。网页登录密码通常不能用于第三方 IMAP 客户端。
-
-### 招聘官网打不开或状态读取失败怎么办？
-
-先在内置浏览器中手动完成登录和验证码，等待岗位列表或投递记录完整渲染，再重新扫描。系统不会绕过登录、验证码、滑块或网站访问限制。
-
-### Windows 提示未知发布者怎么办？
-
-当前便携版可能尚未进行商业代码签名。请确认压缩包来自本仓库 Releases，并核对 Release 页面提供的 SHA256 后再运行。
-
-## 源码运行（开发者）
-
-普通用户请使用上面的 Windows 桌面版。下面内容仅用于二次开发、调试和贡献代码。
-
-### Docker 开发环境
-
-仓库保留 Docker 配置，用于统一 PostgreSQL、API 和 CI 环境；它不是桌面软件的用户安装方式。
+| 27 届校招 | 汇总公司官网岗位，按关键词、地区、公司和匹配度查看候选岗位 |
+| 公司 | 查看招聘入口、抓取状态和岗位数量，排查未完成的来源 |
+| 求职助理 | 用自然语言查询岗位、投递进度、招聘邮件和今日安排；可调用受控工具执行任务 |
+| 投递记录 | 保存岗位与阶段历史，查看已投递、笔试、面试、Offer 等进度 |
+| 招聘邮箱 | 通过 IMAP 同步并整理招聘邮件，识别测评、笔试和面试等事项 |
+| 日程安排 | 把有明确时间的事项加入日程，保留待确认的待办 |
+| 定时任务 | 管理岗位抓取、评分、邮箱处理和进度复核等本地任务 |
+| 配置 | 设置模型连接、简历分析、岗位筛选范围和邮箱连接 |
+
+所有业务记录使用结构化存储；模型负责理解、分析和工具调用。涉及官网登录、验证码以及最终投递提交的步骤由用户在浏览器中完成。
+
+## 界面预览
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/assets/readme-applications.png" alt="投递记录，模拟数据"><br>投递记录</td>
+    <td width="50%"><img src="docs/assets/readme-assistant.png" alt="求职助理，模拟会话"><br>求职助理</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/assets/readme-mail.png" alt="招聘邮箱，模拟邮件"><br>招聘邮箱</td>
+    <td width="50%">界面采用极简主义与瑞士风格，主要面向桌面浏览器使用。截图中的内容均为模拟数据。</td>
+  </tr>
+</table>
+
+## 快速开始
+
+需要 Git 和 Docker Desktop。克隆本仓库后，复制示例配置并启动服务：
 
 ```bash
-git clone https://github.com/849879772/recruitops-agent.git
+git clone https://github.com/zzx666-code/recruitops-agent.git
 cd recruitops-agent
 cp .env.example .env
 cp config/companies.example.yaml config/companies.yaml
@@ -271,82 +49,57 @@ cp config/candidate_profile.example.yaml config/candidate_profile.yaml
 docker compose up -d --build
 ```
 
-PowerShell 可将 `cp` 替换为 `Copy-Item`。服务启动后访问：
+在 Windows PowerShell 中，`cp` 可直接使用，也可以写成 `Copy-Item`。启动后打开 <http://127.0.0.1:8010/>；服务就绪状态可在 <http://127.0.0.1:8010/ready> 查看。停止服务使用 `docker compose down`。初次启动会创建数据库，通常需要等待片刻。
 
-- Web/API：<http://127.0.0.1:8010>
-- 健康检查：<http://127.0.0.1:8010/ready>
+刚启动时没有岗位和投递记录是正常的。进入 **配置** 设置模型连接、简历与岗位关键词，随后运行岗位抓取和匹配流程。招聘邮箱是可选功能，需要单独填写 IMAP 授权码。求职助理依赖可用的模型连接；模型未配置时，其他本地页面仍可使用。
 
-停止开发环境：
+### 建议的使用顺序
 
-```bash
-docker compose down
+1. 在 **配置** 中测试并保存模型连接，上传文字版简历，检查岗位关键词与行业范围。
+2. 在 **求职助理** 发起岗位抓取与评分，或在 **定时任务** 中安排定期执行。
+3. 到 **27 届校招** 查看高匹配岗位，并在招聘官网完成实际投递。
+4. 在 **投递记录** 保存投递结果；按需连接 **招聘邮箱** 并核对 **日程安排**。
+
+模型调用和邮箱连接需要各自服务可用；抓取结果取决于招聘网站的实际页面与访问条件。默认全局写入能力关闭，某些本机页面操作需要对应的局部开关；详见下方配置说明。
+
+## 本地数据与配置
+
+- `.env` 是本机运行配置，包含服务开关与连接参数；不要提交 API Key、邮箱授权码或个人信息。
+- `config/companies.yaml` 与 `config/candidate_profile.yaml` 从示例文件创建，供本地来源和候选人配置使用。
+- 运行数据保存在本地数据库和 `.data/` 等运行目录。Docker 的数据库和服务状态使用命名卷；备份或迁移前请先停止服务并核对卷与目录。
+- 简历、邮件正文、浏览器资料、数据库和备份都不应上传到公开仓库。
+
+默认 `.env.example` 中 `RECRUITOPS_WRITE_ENABLED=false`。本机手动导入投递记录可使用 `RECRUITOPS_LOCAL_APPLICATION_IMPORT_ENABLED=true`；本机招聘邮件整理可使用 `RECRUITOPS_LOCAL_MAIL_TASKS_ENABLED=true`。这些开关只开放各自的局部功能，不代表放开所有写入。更多部署与数据迁移信息见[安装说明](docs/INSTALLATION.md)和[已有数据升级说明](docs/UPGRADE_EXISTING_DATA.md)。
+
+## 开发与检查
+
+项目主要使用 FastAPI、原生 Web 页面、PostgreSQL、Playwright 和 Electron。代码目录如下：
+
+```text
+apps/                 API、Web 工作台和桌面壳
+packages/             领域、存储、抓取、匹配、邮件与 Agent 运行模块
+migrations/           PostgreSQL 迁移
+config/               本地配置示例
+.agents/skills/       求职助理领域技能
+scripts/              启动、诊断、备份及发布辅助脚本
+tests/、evals/        测试与评估
+docs/                 安装、架构和故障排查文档
 ```
 
-### 本地开发与测试
+本地开发和基础检查：
 
 ```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# Linux/macOS: source .venv/bin/activate
 pip install -e ".[dev]"
 playwright install chromium
-uvicorn apps.api.main:app --reload --port 8010
 python -m pytest -c pytest-public.ini
-python -m compileall apps packages scripts
+python -m compileall apps packages evals scripts
+python scripts/check_migrations.py
 docker compose config
 ```
 
-Docker 开发环境固定使用 `@openai/codex@0.149.0`，入口为 `/opt/codex-cli/node_modules/.bin/codex`。在 `.env` 设置 `RECRUITOPS_LLM_API_KEY` 并保存模型连接后，可将 `RECRUITOPS_CODEX_RUNTIME_ENABLED=true` 用于本地助理调试；协议诊断脚本是 `scripts/verify_codex_app_server.py`。助理领域说明位于 `AGENTS.md` 和 `.agents/skills/`。
+README 图片可通过 `scripts/capture_readme_screenshots.py` 重建。它连接项目的纯模拟预览服务，不读取本机数据库；运行时需要 Playwright 和 Chromium。提交图片前仍应目视确认内容。
 
-开发环境的投递记录手动导入可单独设置 `RECRUITOPS_LOCAL_APPLICATION_IMPORT_ENABLED=true`。它只开放本机同源配置页的 CSV/JSON 导入；其他业务写入仍由默认关闭的 `RECRUITOPS_WRITE_ENABLED` 控制。
-
-招聘邮箱的待办整理可单独设置 `RECRUITOPS_LOCAL_MAIL_TASKS_ENABLED=true`。它只开放本机同源页面的邮件分析、邮件来源日程创建与完成状态更新，不会修改投递阶段；其他业务写入仍保持关闭。
-
-## 技术架构
-
-- **桌面层**：Electron、内置招聘浏览器、站点隔离登录和简历闪填面板
-- **应用层**：FastAPI、原生 Web UI、REST API
-- **Agent 层**：MCP typed tools、领域技能、工具路由、审批与审计边界
-- **数据层**：PostgreSQL 16、SQLAlchemy、阶段历史和任务检查点
-- **采集层**：Playwright、Requests、BeautifulSoup、招聘平台适配器
-- **可靠性**：幂等写入、分批执行、心跳、断点恢复、失败归因和冻结评测集
-
-核心岗位、投递、邮件和日程使用结构化数据库查询；模型主要负责简历解析、岗位评分、邮件理解和工具调用。
-
-## 项目结构
-
-```text
-apps/                 FastAPI API 与 Web 工作台
-apps/desktop/         Electron 桌面壳、内置浏览器和简历闪填
-packages/             领域模型、抓取、评分、邮件、工具和流程编排
-migrations/           PostgreSQL 数据库迁移
-config/               公司来源与候选人配置示例
-.agents/skills/       求职助理领域技能
-scripts/              启动、迁移、诊断、备份和发布脚本
-evals/                冻结评测集与可靠性评估
-tests/                单元、集成与契约测试
-docs/                 架构、安装、运行和故障排查文档
-```
-
-## 安全说明
-
-- API Key、邮箱授权码和招聘网站登录状态只保存在本机运行目录中。
-- `.env`、`.data/`、数据库、日志、备份和候选人配置默认不进入 Git。
-- 不要将自己的 `.data` 目录、简历、浏览器存储或邮箱配置上传到公开仓库。
-- 登录、验证码、滑块和最终投递提交由用户本人完成。
-- 邮件与官网证据不足时保留原状态，不用猜测覆盖已确认进度。
-
-发现安全问题请阅读 [SECURITY.md](SECURITY.md)。
-
-## 支持作者
-
-如果这个项目对你有帮助，欢迎请作者喝杯咖啡。感谢你的支持，它会帮助项目继续维护和完善。
-
-<p align="center">
-  <img src="docs/assets/wechat-support.jpg" alt="微信收款码" width="280">
-</p>
-
-## 更多文档
+## 文档
 
 - [安装与部署](docs/INSTALLATION.md)
 - [启动指南](docs/STARTUP_GUIDE.md)
@@ -354,8 +107,9 @@ docs/                 架构、安装、运行和故障排查文档
 - [抓取流程](docs/crawling_process.md)
 - [MCP 工具](docs/MCP.md)
 - [故障排查](docs/TROUBLESHOOTING.md)
+- [安全说明](SECURITY.md)
 - [贡献指南](CONTRIBUTING.md)
 
-## License
+## 来源与许可
 
-[MIT](LICENSE)
+本项目基于[原 RecruitOps 项目](https://github.com/849879772/recruitops-agent)继续开发，保留原有开源许可及第三方组件声明。代码按 [MIT License](LICENSE) 发布；相关组件声明见 `packages/desktop_browser/NOTICE` 和 `packages/desktop_filler/NOTICE`。
