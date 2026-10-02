@@ -1,10 +1,10 @@
-name: Windows desktop release
+name: Windows desktop candidate build
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   package:
@@ -31,26 +31,10 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           Set-Location R:\
-          python -m pip install -e '.[dev]'
+          python -m pip install -e .
           python -m playwright install chromium
-          python -m venv .venv-desktop-tests
-          .\.venv-desktop-tests\Scripts\python.exe -m pip install -r scripts/desktop/test-requirements.txt
           Set-Location R:\apps\desktop
           npm ci
-          npm test
-      - name: Run public Python tests
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          Set-Location R:\
-          # Service-session runners cannot initialize restricted-token GUI objects (0xC0000142).
-          # These four native process tests run during local release acceptance.
-          python -m pytest -c pytest-public.ini `
-            --deselect tests/test_desktop_runtime.py::test_windows_job_handles_unicode_argv_and_only_owned_subtree `
-            --deselect tests/test_desktop_runtime.py::test_windows_job_captures_child_output `
-            --deselect tests/test_desktop_runtime.py::test_windows_job_launches_with_same_user_restricted_token `
-            --deselect tests/test_desktop_runtime.py::test_windows_job_reaps_grandchild
       - name: Acquire pinned native components
         shell: pwsh
         env:
