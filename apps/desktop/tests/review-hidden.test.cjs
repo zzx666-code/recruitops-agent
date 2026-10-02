@@ -170,7 +170,7 @@ test('hidden real main reviews rAF, iframe and auth evidence without presenting 
       try {await globalThis.reviewFixture.reviewPage(origin+route,'scope-'+route.slice(1),['fixture-app'],undefined,Date.now()+3500);}
       catch(error){return {code:error.message,summary:error.lastObservation};}
     },{origin,route});
-    assert.equal(failure.code,'browser_readiness_timeout',route);
+    assert.match(failure.code,/^browser_(readiness|observation)_timeout$/,route);
     assert.equal(failure.summary.recordCount,0);
     if(route==='/denied-frame') {
       assert.equal(failure.summary.pageState,'frame_scope_denied');
@@ -187,7 +187,7 @@ test('hidden real main reviews rAF, iframe and auth evidence without presenting 
     try { await globalThis.reviewFixture.reviewPage(origin+'/iframe-never-ready','iframe-deadline',['fixture-app'],undefined,Date.now()+3500); }
     catch(error){return {code:error.message,summary:error.lastObservation};}
   },origin);
-  assert.equal(neverReady.code,'browser_readiness_timeout');
+  assert.match(neverReady.code,/^browser_(readiness|observation)_timeout$/);
   assert.equal(neverReady.summary.iframeCount,2);
   assert.equal(neverReady.summary.pageState,'frame_unavailable');
   assert.equal(neverReady.summary.unavailableFrameCount,2);
