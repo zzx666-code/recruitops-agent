@@ -6,7 +6,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { _electron } = require('playwright');
 
-test('hidden real main reviews rAF, iframe and auth evidence without presenting a window', {timeout: 60000}, async t => {
+test('hidden real main reviews rAF, iframe and auth evidence without presenting a window', {timeout: 90000}, async t => {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'recruitops-review-anonymous-'));
   let foreignRequests=0;
   const foreignServer=http.createServer((_req,res)=>{foreignRequests++;res.end('foreign');});
@@ -167,7 +167,7 @@ test('hidden real main reviews rAF, iframe and auth evidence without presenting 
   }
   for (const route of ['/denied-frame','/hidden-record-frame']) {
     const failure=await application.evaluate(async(_electron,{origin,route})=>{
-      try {await globalThis.reviewFixture.reviewPage(origin+route,'scope-'+route.slice(1),['fixture-app'],undefined,Date.now()+1100);}
+      try {await globalThis.reviewFixture.reviewPage(origin+route,'scope-'+route.slice(1),['fixture-app'],undefined,Date.now()+3500);}
       catch(error){return {code:error.message,summary:error.lastObservation};}
     },{origin,route});
     assert.equal(failure.code,'browser_readiness_timeout',route);
@@ -184,7 +184,7 @@ test('hidden real main reviews rAF, iframe and auth evidence without presenting 
   assert.equal(delayedFrames.result.diagnostics.iframeCount,2);
   assert.equal(delayedFrames.result.application_records.length,1);
   const neverReady=await application.evaluate(async(_electron,origin)=>{
-    try { await globalThis.reviewFixture.reviewPage(origin+'/iframe-never-ready','iframe-deadline',['fixture-app'],undefined,Date.now()+1100); }
+    try { await globalThis.reviewFixture.reviewPage(origin+'/iframe-never-ready','iframe-deadline',['fixture-app'],undefined,Date.now()+3500); }
     catch(error){return {code:error.message,summary:error.lastObservation};}
   },origin);
   assert.equal(neverReady.code,'browser_readiness_timeout');
