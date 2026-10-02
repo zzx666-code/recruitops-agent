@@ -560,6 +560,32 @@ def test_saved_mailbox_enables_manual_sync_without_global_business_writes(owner,
     assert client.post(url, headers=headers, json={"settings": {
         "mail_imap_username": ""}}).status_code == 200
     assert not get_settings().mail_enabled
+    disabled = client.post("/api/recruitment-mails/sync")
+    assert disabled.status_code == 503
+    assert "重启当前程序" in disabled.json()["detail"]
+
+
+def test_mail_task_updates_follow_local_write_authorization(owner, monkeypatch):
+    client, headers, _, _ = owner
+    monkeypatch.setenv("RECRUITOPS_LLM_ENABLED", "true")
+    get_settings.cache_clear()
+    from packages.recruitment_mail import processing
+
+    monkeypatch.setattr(processing, "process_pending_mail", lambda *_args, **_kwargs: {"status": "completed", "processed": 0})
+    path = "/api/local-ui/recruitment-mail/tasks/process"
+    response = client.post(path, headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "completed"
+    assert client.post(path).status_code == 403
+    status_path = "/api/local-ui/mail-tasks/missing/status"
+    update = {"status": "pending", "expected_updated_at": "2026-10-02T00:00:00Z"}
+    assert client.patch(status_path, headers=headers, json=update).status_code == 404
+    assert client.patch(status_path, json=update).status_code == 403
+
+    monkeypatch.setenv("RECRUITOPS_WRITE_ENABLED", "false")
+    get_settings.cache_clear()
+    assert client.post(path, headers=headers).status_code == 403
+    assert client.patch(status_path, headers=headers, json=update).status_code == 403
 
 
 def test_custom_title_keywords_include_and_exclude():

@@ -322,7 +322,7 @@ def test_manual_form_and_model_connections_offline(width, tmp_path):
         expect(page.locator('[name="mail_sync_on_startup"]')).to_have_count(0)
         page.locator('[name="title_keywords"]').fill("Python")
         page.locator("#configuration-save").click()
-        expect(page.locator("#configuration-save-result")).to_have_text("Saved fixture")
+        expect(page.locator("#configuration-save-result")).to_contain_text("请退出并重新打开软件")
         assert page.evaluate("window.__applyCalls || 0") == 0
         saved = json.loads(next(body for _, path, body in calls if path.endswith("/configuration/save")))
         assert saved["active_model_connection_id"] == "test"
@@ -396,7 +396,7 @@ def test_manual_form_and_model_connections_offline(width, tmp_path):
         expect(page.locator('[name="vision_enabled"]')).not_to_be_checked()
         page.locator('#configuration-industry-groups input').check()
         page.locator("#configuration-save").click()
-        expect(page.locator("#configuration-save-result")).to_have_text("Saved fixture")
+        expect(page.locator("#configuration-save-result")).to_contain_text("请退出并重新打开软件")
         disabled = json.loads([body for _, path, body in calls if path.endswith("/configuration/save")][-1])
         assert disabled["settings"]["llm_enabled"] is False
         assert disabled["settings"]["codex_runtime_enabled"] is False

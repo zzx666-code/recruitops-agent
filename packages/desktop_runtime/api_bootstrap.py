@@ -8,12 +8,13 @@ from urllib.parse import urlsplit
 class ReadOnlyGuard:
     """Outer bearer/origin boundary; existing bridge keeps its HMAC challenge."""
 
-    def __init__(self, app, token, *, writes=False, owned_origin=None):
+    def __init__(self, app, token, *, writes=False, owned_origin=None, model_token=None):
         self.app = app
         self.authorization = ("Bearer " + token).encode("ascii")
         self.writes = writes
         self.owned_origin = owned_origin.encode("ascii") if owned_origin else None
         self.owned_host = urlsplit(owned_origin).netloc.encode("ascii") if owned_origin else None
+        self.model_token = model_token
 
     def origin_allowed(self, headers, *, websocket=False):
         if self.owned_origin is None:
@@ -34,6 +35,15 @@ class ReadOnlyGuard:
         if scope["type"] == "http":
             headers = dict(scope.get("headers", []))
             authorized = hmac.compare_digest(headers.get(b"authorization", b""), self.authorization)
+            model_request = (scope["method"] == "POST"
+                             and scope.get("path") == "/api/codex-model/responses")
+            if not authorized and model_request and self.writes and self.model_token is not None:
+                credential = self.model_token()
+                if credential:
+                    authorized = hmac.compare_digest(
+                        headers.get(b"authorization", b""),
+                        ("Bearer " + credential).encode("utf-8"),
+                    )
             configuration_read = (scope["method"] == "POST"
                                   and scope.get("path") == "/api/local-ui/configuration/read")
             status = 401 if not authorized else (403 if not self.writes
@@ -54,6 +64,7 @@ def main():
         raise SystemExit("isolated supervisor required")
     import uvicorn
     from apps.api.main import app, get_storage_engine
+    from packages.config import get_settings
     from fastapi import Request
     from fastapi.responses import JSONResponse
     from sqlalchemy import text
@@ -96,7 +107,13 @@ def main():
         ]})
 
     port = int(os.environ["RECRUITOPS_API_PORT"])
-    uvicorn.run(ReadOnlyGuard(app, token, writes=writes, owned_origin=f"http://127.0.0.1:{port}"),
+    def model_token():
+        settings = get_settings()
+        return (settings.llm_api_key if settings.llm_enabled and settings.model_api_style == "openai"
+                else "")
+
+    uvicorn.run(ReadOnlyGuard(app, token, writes=writes,
+                              owned_origin=f"http://127.0.0.1:{port}", model_token=model_token),
                 host="127.0.0.1", port=port, access_log=False, ws="websockets")
 
 

@@ -89,7 +89,7 @@ def update_schedule_event(
 def update_mail_task_status(event_id: str, body: ScheduleEventPatchRequest) -> ScheduleEventMutationResponse:
     """Update only completion state on a mail-sourced task."""
     settings = get_settings()
-    if not local_ui_request.get() or not settings.local_mail_tasks_enabled:
+    if not local_ui_request.get() or not (settings.write_enabled or settings.local_mail_tasks_enabled):
         raise HTTPException(403, "招聘邮箱待办状态更新未启用")
     if body.model_fields_set != {"status", "expected_updated_at"} or body.status not in {"pending", "completed", "ignored"}:
         raise HTTPException(422, "只能更新邮件待办的状态")

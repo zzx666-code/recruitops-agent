@@ -1234,7 +1234,7 @@ def sync_recruitment_mails(
 
     settings = get_settings()
     if not getattr(settings, "mail_enabled", False):
-        raise HTTPException(status_code=503, detail="RECRUITOPS_MAIL_ENABLED is false")
+        raise HTTPException(status_code=503, detail="招聘邮箱尚未启用；请在配置中保存完整邮箱连接后重启当前程序")
     try:
         result = _run_recruitment_mail_sync(limit=limit, force=True)
     except Exception as exc:
@@ -1248,7 +1248,7 @@ async def process_local_mail_tasks() -> dict[str, Any]:
     settings = get_settings()
     if not local_ui_request.get():
         raise HTTPException(403, "Local same-origin UI request required")
-    if not settings.local_mail_tasks_enabled:
+    if not (settings.write_enabled or settings.local_mail_tasks_enabled):
         raise HTTPException(403, "招聘邮箱待办整理未启用")
     if not settings.llm_enabled or not settings.llm_api_key:
         raise HTTPException(503, "请先在配置中启用模型连接")

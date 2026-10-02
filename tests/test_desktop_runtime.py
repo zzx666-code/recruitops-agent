@@ -294,6 +294,72 @@ def test_api_read_only_guard(kind, method, token, status):
     assert sent[0].get("status", sent[0].get("code")) == status
 
 
+@pytest.mark.parametrize("method,path,credential,writes,host,origin,expected", [
+    ("POST", "/api/codex-model/responses", b"Bearer model-secret", True,
+     b"127.0.0.1:55002", None, 200),
+    ("POST", "/api/codex-model/responses", b"Bearer wrong", True,
+     b"127.0.0.1:55002", None, 401),
+    ("POST", "/api/local-ui/configuration/save", b"Bearer model-secret", True,
+     b"127.0.0.1:55002", None, 401),
+    ("GET", "/api/codex-model/responses", b"Bearer model-secret", True,
+     b"127.0.0.1:55002", None, 401),
+    ("POST", "/api/codex-model/responses", b"Bearer model-secret", False,
+     b"127.0.0.1:55002", None, 401),
+    ("POST", "/api/codex-model/responses", b"Bearer model-secret", True,
+     b"localhost:55002", None, 403),
+    ("POST", "/api/codex-model/responses", b"Bearer model-secret", True,
+     b"127.0.0.1:55002", b"https://other.example", 403),
+])
+def test_model_adapter_credential_is_scoped_to_owned_post(
+    method, path, credential, writes, host, origin, expected,
+):
+    sent = []
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200})
+
+    async def send(message):
+        sent.append(message)
+
+    headers = [(b"authorization", credential), (b"host", host)]
+    if origin is not None:
+        headers.append((b"origin", origin))
+    guard = ReadOnlyGuard(app, "api-secret", writes=writes,
+                          owned_origin="http://127.0.0.1:55002",
+                          model_token=lambda: "model-secret")
+    asyncio.run(guard({"type": "http", "method": method, "path": path,
+                       "headers": headers}, None, send))
+    assert sent[0]["status"] == expected
+
+
+def test_model_adapter_credential_uses_current_saved_key():
+    current = ["first-key"]
+    sent = []
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200})
+
+    async def send(message):
+        sent.append(message)
+
+    guard = ReadOnlyGuard(app, "api-secret", writes=True,
+                          owned_origin="http://127.0.0.1:55002",
+                          model_token=lambda: current[0])
+
+    def request(key):
+        sent.clear()
+        asyncio.run(guard({"type": "http", "method": "POST",
+                           "path": "/api/codex-model/responses",
+                           "headers": [(b"authorization", f"Bearer {key}".encode()),
+                                       (b"host", b"127.0.0.1:55002")]}, None, send))
+        return sent[0]["status"]
+
+    assert request("first-key") == 200
+    current[0] = "second-key"
+    assert request("first-key") == 401
+    assert request("second-key") == 200
+
+
 def test_desktop_cli_requires_explicit_isolation_root(bundle, tmp_path, capsys):
     target = tmp_path / "not-created"
     assert main(["--resources", str(bundle.root), "--instance", str(target),

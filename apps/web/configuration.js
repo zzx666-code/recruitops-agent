@@ -383,7 +383,10 @@
       if (event.submitter === completeButton) payload.complete_onboarding = true;
       const result = await post("save", payload);
       await load(); inlineMessage("configuration-save-result", payload.complete_onboarding
-        ? await savedConfigurationMessage(result) : result.message);
+        ? await savedConfigurationMessage(result)
+        : window.recruitopsDesktop && result.restart_required
+          ? "配置已保存。请退出并重新打开软件，使邮箱和模型配置生效。"
+          : result.message);
     } catch (error) { inlineMessage("configuration-save-result", `保存失败：${error.message}`, true); }
     finally { button.disabled = false; completeButton.disabled = false; }
   });

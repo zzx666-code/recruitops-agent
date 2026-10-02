@@ -277,6 +277,19 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .analysis-block-title--good { color: var(--success); }
 .company-browser-toolbar { width: min(100%, 680px); }
 .company-ranking-row:hover { background: var(--surface-subtle); }
+#companies-view .data-table th { font-size: 12px; }
+#companies-view .data-table td { font-size: 14px; }
+#companies-view .company-units,
+#companies-view .score-badge,
+#companies-view .company-source-status,
+#companies-view .company-source-job-status,
+#companies-view .company-source-job-availability { font-size: 12px; }
+#companies-view .company-source-subtext,
+#companies-view .company-source-job-url,
+#companies-view .company-source-job-failure,
+#companies-view .company-source-url-line,
+#companies-view .company-source-facts,
+#companies-view .company-source-history { font-size: 14px; }
 .company-source-toolbar { background: var(--surface); }
 .company-source-detail { border-left-color: var(--accent); background: var(--surface-subtle); }
 .company-source-link { color: var(--accent-ink); }
@@ -357,6 +370,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .chat-header { border-bottom: 2px solid var(--ink); }
 .message { max-width: min(78%, 740px); border-radius: 0; }
 .message--assistant, .agent-message-list .message--assistant { border: 1px solid var(--line); background: var(--surface-subtle); }
+.message--assistant .message-copy,
+.message--assistant .message-copy h3,
+.message--assistant .message-copy h4,
+.message--assistant .message-copy h5,
+.message--assistant .message-copy h6 { font-size: 14px; }
 .message--user, .agent-message-list .message--user { border: 0; background: var(--ink); color: #fff; }
 .agent-message-list .message--user .message-meta, .agent-message-list .message--user .message-copy { color: #fff; }
 .assistant-page .agent-message-list .message--assistant {
