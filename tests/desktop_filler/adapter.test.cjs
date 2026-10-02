@@ -67,7 +67,7 @@ test('rejects symlinks, missing, oversize and invalid UTF8 sources without leaki
   const link=folder+'-link';
   try { fs.symlinkSync(folder,link,process.platform==='win32'?'junction':'dir'); }
   catch(error) { if(error.code==='EPERM') return; throw error; }
-  t.after(()=>fs.unlinkSync(link));
+  t.after(()=>fs.rmSync(link,{recursive:true,force:true}));
   assert.throws(()=>api.loadLocalFiller(link),/symlink_rejected/);
 });
 

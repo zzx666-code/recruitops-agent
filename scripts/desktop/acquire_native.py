@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -27,8 +28,10 @@ EXPECTED = {
 def main():
     root = ROOT / ".desktop-runtime-tests/native-build"
     root.mkdir(parents=True, exist_ok=True)
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({
-        "http": "http://127.0.0.1:10808", "https": "http://127.0.0.1:10808"}))
+    proxy = os.environ.get("RECRUITOPS_PACKAGE_PROXY", "").strip()
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({"http": proxy, "https": proxy} if proxy else {})
+    )
     ledger = {}
     for name, (version, url, prefix, license_file) in INPUTS.items():
         archive = root / f"{name}-{version}.zip"

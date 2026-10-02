@@ -8,6 +8,7 @@ __pycache__/
 .coverage
 htmlcov/
 .venv/
+.venv-desktop-tests/
 venv/
 
 # Local configuration and secrets

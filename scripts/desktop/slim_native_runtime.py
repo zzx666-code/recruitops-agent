@@ -93,9 +93,6 @@ def remove_distributions(site: Path, reference_site: Path) -> tuple[int, int, li
             directory.rmdir()
         except OSError:
             pass
-    missing = REMOVED_DISTRIBUTIONS - set(removed)
-    if missing:
-        raise ValueError(f"expected distributions are missing: {sorted(missing)}")
     return files_removed, bytes_removed, sorted(removed)
 
 

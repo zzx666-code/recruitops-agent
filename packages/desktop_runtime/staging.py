@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -48,9 +49,11 @@ def fetch_archive(spec, cache):
         if digest(target) != expected:
             raise RuntimeFailure("cached_archive_hash_mismatch")
         return target
-    # Explicit proxy, never inherited personal proxy settings. No loopback downloads.
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({
-        "http": "http://127.0.0.1:10808", "https": "http://127.0.0.1:10808"}))
+    # Use an explicitly configured proxy when supplied; otherwise connect directly.
+    proxy = os.environ.get("RECRUITOPS_PACKAGE_PROXY", "").strip()
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({"http": proxy, "https": proxy} if proxy else {})
+    )
     temporary = target.with_suffix(".partial")
     try:
         with opener.open(url, timeout=90) as source, temporary.open("xb") as output:

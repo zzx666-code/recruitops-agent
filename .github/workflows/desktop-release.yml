@@ -1,0 +1,97 @@
+name: Windows desktop release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+      - name: Prepare short build path
+        shell: pwsh
+        run: |
+          subst R: $env:GITHUB_WORKSPACE
+          New-Item -ItemType Directory -Path D:\ro-release -Force | Out-Null
+      - name: Install application and browser build dependencies
+        shell: pwsh
+        run: |
+          Set-Location R:\
+          python -m pip install -e '.[dev]'
+          python -m pytest -c pytest-public.ini
+          python -m playwright install chromium
+          python -m venv .venv-desktop-tests
+          .\.venv-desktop-tests\Scripts\python.exe -m pip install -r scripts/desktop/test-requirements.txt
+          Set-Location R:\apps\desktop
+          npm ci
+          npm test
+      - name: Acquire pinned native components
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Set-Location R:\
+          python scripts/desktop/acquire_native.py
+          $build = 'R:\.desktop-runtime-tests\native-build'
+          gh release download rust-v0.149.0 -R openai/codex --pattern 'codex*-x86_64-pc-windows-msvc.exe.zip' --dir $build
+          python scripts/desktop/acquire_codex.py
+          python scripts/desktop/build_python_wheels.py
+          python scripts/desktop/stage_runtime.py stage --lock scripts/desktop/resources-smoke.lock.json --cache .desktop-runtime-tests/native-cache --output .desktop-runtime-tests/native-components-smoke-v2
+      - name: Build pgvector and stage Chromium
+        shell: pwsh
+        run: |
+          Set-Location R:\
+          $build = 'R:\.desktop-runtime-tests\native-build'
+          $vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -property installationPath
+          if (-not $vs) { throw 'Visual Studio build tools unavailable' }
+          Push-Location "$build\pgvector"
+          try { & R:\scripts\desktop\build_pgvector.cmd $vs "$build\postgres"; if ($LASTEXITCODE -ne 0) { throw 'pgvector build failed' } }
+          finally { Pop-Location }
+          $browser = Join-Path $env:LOCALAPPDATA 'ms-playwright'
+          New-Item -ItemType Directory -Path "$build\chromium" -Force | Out-Null
+          Get-ChildItem $browser -Directory | Where-Object { $_.Name -match '^(chromium|chromium_headless_shell|ffmpeg|winldd)-' } | ForEach-Object {
+            Copy-Item $_.FullName "$build\chromium\$($_.Name)" -Recurse
+          }
+          if (-not (Test-Path "$build\chromium\chromium-1208\chrome-win64\chrome.exe")) { throw 'Pinned Chromium revision unavailable' }
+      - name: Assemble and test sealed runtime
+        shell: pwsh
+        run: |
+          Set-Location R:\
+          python scripts/desktop/assemble_native.py --output .desktop-runtime-tests/native-runtime-full --application-source "https://github.com/${{ github.repository }}/commit/${{ github.sha }}"
+          python scripts/desktop/slim_native_runtime.py --source .desktop-runtime-tests/native-runtime-full --output .desktop-runtime-tests/native-runtime-release
+          python scripts/desktop/verify_native.py --bundle .desktop-runtime-tests/native-runtime-release --instance .desktop-runtime-tests/release-native-acceptance
+      - name: Build desktop package and run fresh-install acceptance
+        shell: pwsh
+        env:
+          RECRUITOPS_DESKTOP_PACKAGE_RUNTIME: R:\.desktop-runtime-tests\native-runtime-release
+          RECRUITOPS_DESKTOP_PACKAGE_OUTPUT_ROOT: D:\ro-release
+        run: |
+          Set-Location R:\apps\desktop
+          npm run package
+          $candidate = @(Get-ChildItem D:\ro-release -Directory)
+          if ($candidate.Count -ne 1) { throw 'Expected exactly one desktop package' }
+          $exe = Join-Path $candidate[0].FullName 'recruitops-desktop-win32-x64\RecruitOps-Desktop-Preview.exe'
+          $env:RECRUITOPS_DESKTOP_TEST_NEW_BUILD = $exe
+          $env:RECRUITOPS_DESKTOP_TEST_BUILD_ROOT = 'D:\ro-release'
+          npx playwright test tests/packaged.spec.cjs
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged desktop acceptance failed' }
+          $source = Join-Path $candidate[0].FullName 'recruitops-desktop-win32-x64'
+          python R:\scripts\desktop\package_portable.py --source $source --output 'D:\ro-release\RecruitOps-Desktop-0.1.7-Windows-x64.zip'
+      - name: Publish verified portable ZIP
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Set-Location R:\
+          gh release create v0.1.7 'D:\ro-release\RecruitOps-Desktop-0.1.7-Windows-x64.zip' 'D:\ro-release\RecruitOps-Desktop-0.1.7-Windows-x64.zip.sha256.txt' --target $env:GITHUB_SHA --title 'RecruitOps Desktop v0.1.7' --notes-file docs/RELEASE_NOTES_0.1.7.md

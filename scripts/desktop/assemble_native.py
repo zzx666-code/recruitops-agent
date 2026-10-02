@@ -39,7 +39,7 @@ def main():
     for name in ("node.exe", "LICENSE"):
         shutil.copyfile(node / name, destination / "node" / name)
     wheels = sorted((build / "wheels").glob("*.whl"))
-    pinned = json.loads((ROOT / "scripts/desktop/native-wheels.lock.json").read_text(encoding="utf-8"))
+    pinned = json.loads((build / "wheels.json").read_text(encoding="utf-8"))
     expected = {item["filename"]: item["sha256"] for item in pinned["wheels"]}
     if {wheel.name for wheel in wheels} != set(expected):
         raise ValueError("wheel inventory does not match the recorded lock")

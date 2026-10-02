@@ -71,8 +71,10 @@ async function main() {
   console.log('Staged resources verified; native preflight');
   await preflight(stage,preflightHome);
   process.env.RECRUITOPS_DESKTOP_PACKAGE_STAGE = stage;
-  Object.assign(process.env,{HTTP_PROXY:'http://127.0.0.1:10808',HTTPS_PROXY:'http://127.0.0.1:10808',
-    NO_PROXY:'localhost,127.0.0.1,::1',ELECTRON_GET_USE_PROXY:'1',GLOBAL_AGENT_HTTP_PROXY:'http://127.0.0.1:10808',
+  const proxy=process.env.RECRUITOPS_PACKAGE_PROXY;
+  if(proxy) Object.assign(process.env,{HTTP_PROXY:proxy,HTTPS_PROXY:proxy,
+    ELECTRON_GET_USE_PROXY:'1',GLOBAL_AGENT_HTTP_PROXY:proxy});
+  Object.assign(process.env,{NO_PROXY:'localhost,127.0.0.1,::1',
     GLOBAL_AGENT_NO_PROXY:'localhost,127.0.0.1,::1',electron_config_cache:path.join(app,'.cache/electron')});
   fs.mkdirSync(output,{recursive:true});
   console.log('Packaging verified snapshot:',output);

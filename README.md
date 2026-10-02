@@ -2,7 +2,7 @@
 
 面向 2027 届校招的本地求职工作台。把岗位发现、匹配分析、投递记录、招聘邮件、日程与求职助理放在同一个界面，减少在招聘网站、邮箱和表格之间来回切换。
 
-目前这个仓库以**源码运行**为主。项目还包含 Electron 桌面壳与内置招聘浏览器；本仓库尚未发布可直接下载的安装包，请不要使用其他仓库的 Release 作为本仓库版本。
+Windows 10/11 x64 用户可从[本仓库 Releases](https://github.com/zzx666-code/recruitops-agent/releases)下载完整便携包，解压后双击 `RecruitOps-Desktop-Preview.exe`。软件自带 Python、Node.js、PostgreSQL/pgvector 和 Chromium，不要求 Docker。首次启动会在程序旁创建 `.data`；模型与邮箱需要用户自行配置。其他平台目前仍以源码运行。
 
 > 下方界面图片由本项目的本地预览服务生成，使用的是模拟公司、岗位、邮件和会话，不含真实求职数据。
 
