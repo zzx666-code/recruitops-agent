@@ -266,7 +266,7 @@ test('crash leftovers cleaned only in owned temporary namespace', t => {
 });
 
 test('Chinese spaces and real long path store persist across restart', t => {
-  const f=fixture(t); const root=path.join(f.root,'匿名 space',...Array(8).fill('synthetic-long-directory'));
+  const f=fixture(t); const root=path.join(f.root,'匿名 space',...Array(12).fill('synthetic-long-directory'));
   fs.mkdirSync(io(root),{recursive:true}); assert.ok(root.length>260);
   const options={...f.options,instanceRoot:root}; const store=new FillerStore(options);
   store.saveProfile({basic:{fullName:'匿名'}});
