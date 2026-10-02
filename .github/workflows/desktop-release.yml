@@ -44,6 +44,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           Set-Location R:\
+          & R:\scripts\desktop\grant_ci_desktop_access.ps1
           $pythonExe = (Get-Command python).Source
           icacls $pythonExe
           icacls (Split-Path $pythonExe)
