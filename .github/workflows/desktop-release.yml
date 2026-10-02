@@ -44,6 +44,26 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           Set-Location R:\
+          $pythonExe = (Get-Command python).Source
+          icacls $pythonExe
+          icacls (Split-Path $pythonExe)
+          $probe = @'
+          import os, pathlib, subprocess, sys, tempfile
+          from packages.desktop_runtime.windows import WindowsTree, create_restricted_token
+          env = {key: value for key, value in os.environ.items() if key.upper() in {"SYSTEMROOT", "WINDIR"}}
+          with tempfile.TemporaryDirectory() as root:
+              ordinary = subprocess.run([sys.executable, "-I", "-c", "print('child started')"], cwd=root, env=env, capture_output=True, text=True)
+              print("ordinary", hex(ordinary.returncode), repr(ordinary.stdout), repr(ordinary.stderr))
+              for name, factory in (("unrestricted", lambda _kernel, _security: None), ("restricted", create_restricted_token)):
+                  output = pathlib.Path(root) / (name + ".log")
+                  tree = WindowsTree(token_factory=factory)
+                  try:
+                      child = tree.spawn([sys.executable, "-I", "-c", "print('child started')"], root, env, output=output)
+                      print(name, hex(child.wait(10)), repr(output.read_text()))
+                  finally:
+                      tree.close()
+          '@
+          python -c $probe
           python -m pytest -c pytest-public.ini tests/test_desktop_runtime.py -k windows_job -q
       - name: Run public Python tests
         shell: pwsh
